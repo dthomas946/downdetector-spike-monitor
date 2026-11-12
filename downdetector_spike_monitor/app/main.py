@@ -27,7 +27,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 
 from .backends import EnterpriseBackend, UnofficialBackend
 from .dd_client import DowndetectorClient
@@ -114,6 +114,26 @@ def _m() -> Monitor:
     if monitor is None:
         raise HTTPException(503, "monitor not started")
     return monitor
+
+
+STATIC = Path(__file__).parent / "static"
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def ui():
+    return HTMLResponse((STATIC / "index.html").read_text(),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/details")
+def details():
+    """Per-target series + indicators for the dashboard."""
+    return _m().details_view()
+
+
+@app.delete("/watchlist")
+def del_watch_q(key: str = Query(...)):
+    return del_watch(key)
 
 
 @app.get("/health")

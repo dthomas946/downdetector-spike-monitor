@@ -64,6 +64,11 @@ Auth is `POST /v2/tokens?grant_type=client_credentials` with HTTP Basic
 (Client ID / Secret), then `Authorization: Bearer …`. One bulk `GET /v2/companies?ids=…`
 per poll covers every watched company.
 
+## Dashboard
+Open **Downdetector** in the Home Assistant sidebar (Ingress panel), or `http://<HA>:8099/` directly.
+It shows active spikes, a 24-hour reports-vs-baseline chart and top reported problems per
+service, and lets you add/remove watchlist entries and search Downdetector companies.
+
 ## Spike rules (`/config` shows the live values)
 A target is *spiking* when any of these is true, and **current ≥ `spike_min_reports`**
 for the numeric rules so a 1→6 blip on a quiet service never pages you:

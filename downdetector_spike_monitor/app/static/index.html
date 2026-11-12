@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downdetector Spike Monitor</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1c2330; --muted: #6b7686; --line: #e3e7ed;
+    --danger: #d64545; --danger-bg: #fdeceb; --warn: #c98a12; --warn-bg: #fdf4e1;
+    --ok: #2f8a57; --ok-bg: #e8f5ee; --accent: #2f6fd6; --base: #9aa5b4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --card: #1a1f26; --ink: #e6e9ee; --muted: #8b95a5; --line: #2a313b;
+      --danger: #ff6b6b; --danger-bg: #3a1e20; --warn: #f0b542; --warn-bg: #3a3020;
+      --ok: #4cc488; --ok-bg: #1c3328; --accent: #6aa0ff; --base: #5d6878;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { padding: 18px 24px 8px; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: baseline; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; margin: 0 0 12px; font-weight: 650; }
+  .meta { color: var(--muted); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  .err { color: var(--danger); }
+  main { padding: 8px 24px 32px; display: grid; gap: 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; }
+  .tile .v { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tile .l { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .tile.hot .v { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase;
+       letter-spacing: .04em; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  th.num { text-align: right; }
+  .name a { color: var(--ink); text-decoration: none; font-weight: 600; }
+  .name a:hover { text-decoration: underline; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .pill.danger { background: var(--danger-bg); color: var(--danger); }
+  .pill.warning { background: var(--warn-bg); color: var(--warn); }
+  .pill.none, .pill.success { background: var(--ok-bg); color: var(--ok); }
+  .pill.unknown { background: var(--line); color: var(--muted); }
+  .chips span { display: inline-block; font-size: 12px; padding: 1px 7px; margin: 2px 4px 2px 0;
+                border: 1px solid var(--line); border-radius: 6px; color: var(--muted); }
+  svg.spark { display: block; }
+  .reasons { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  button, select, input { font: inherit; color: inherit; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 7px 14px;
+           font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 4px 10px; }
+  button.ghost:hover { color: var(--danger); border-color: var(--danger); }
+  button:disabled { opacity: .5; cursor: default; }
+  input, select { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  .form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+  .form label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } .hide-sm { display: none; } }
+  .results { margin-top: 10px; max-height: 260px; overflow: auto; }
+  .results div { display: flex; justify-content: space-between; align-items: center; padding: 6px 2px;
+                 border-bottom: 1px solid var(--line); }
+  .empty { color: var(--muted); padding: 18px 4px; }
+  .toast { position: fixed; bottom: 18px; right: 18px; background: var(--ink); color: var(--bg);
+           padding: 9px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; }
+  .toast.show { opacity: .95; }
+  .legend { font-size: 12px; color: var(--muted); display: flex; gap: 14px; }
+  .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Downdetector Spike Monitor</h1>
+  <div class="meta" id="meta">Loading…</div>
+  <div style="margin-left:auto"><button id="pollBtn">Poll now</button></div>
+</header>
+
+<main>
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <h2>Watched services</h2>
+      <div class="legend"><span><i style="background:var(--accent)"></i>Reports / 15 min</span>
+        <span><i style="background:var(--base)"></i>Baseline</span></div>
+    </div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th>Service</th><th>State</th><th class="num">Reports</th><th class="num">Baseline</th>
+          <th class="num">× normal</th><th>Last 24 h</th><th class="hide-sm">Top problems</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="7" class="empty">Waiting for first poll…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="two">
+    <section class="card">
+      <h2>Watchlist</h2>
+      <table><thead><tr><th>Type</th><th>Value</th><th>Country</th><th></th></tr></thead>
+        <tbody id="watch"></tbody></table>
+    </section>
+
+    <section class="card">
+      <h2>Add to watchlist</h2>
+      <div class="form">
+        <label>Type
+          <select id="kind">
+            <option value="company">Company</option>
+            <option value="url">Website URL</option>
+            <option value="country">Whole country</option>
+            <option value="city">City</option>
+          </select></label>
+        <label id="valLbl">Company slug or name <input id="value" placeholder="att, entergy, chase…" size="22"></label>
+        <label>Country <input id="country" placeholder="US" size="4" maxlength="2"></label>
+        <span id="cityFields" style="display:none" class="form">
+          <label>Latitude <input id="lat" size="8" placeholder="34.7465"></label>
+          <label>Longitude <input id="lon" size="9" placeholder="-92.2896"></label>
+          <label>Companies <input id="cos" size="18" placeholder="att, xfinity"></label>
+        </span>
+        <button id="addBtn">Add</button>
+      </div>
+      <div class="form" style="margin-top:16px">
+        <label>Search Downdetector <input id="q" placeholder="type 2+ letters" size="28"></label>
+      </div>
+      <div class="results" id="results"></div>
+    </section>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+// All URLs are relative so this works behind Home Assistant Ingress.
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => Number(n ?? 0).toLocaleString();
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2500); }
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.text()).slice(0, 200) || r.status);
+  return r.status === 204 ? null : r.json();
+}
+function ago(iso) {
+  if (!iso) return "never";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 90) return Math.round(s) + "s ago";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  return Math.round(s / 3600) + " h ago";
+}
+
+function spark(reports, baseline, active) {
+  const W = 220, H = 44, n = reports.length;
+  if (!n) return "";
+  const max = Math.max(1, ...reports, ...baseline);
+  const x = i => (i / Math.max(1, n - 1)) * (W - 2) + 1;
+  const y = v => H - 2 - (v / max) * (H - 6);
+  const path = arr => arr.map((v, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1)).join(" ");
+  const area = path(reports) + ` L${x(n - 1).toFixed(1)} ${H - 1} L1 ${H - 1} Z`;
+  const col = active ? "var(--danger)" : "var(--accent)";
+  return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-label="24 hour reports, peak ${max}">
+    <path d="${area}" fill="${col}" opacity=".12"/>
+    <path d="${path(baseline)}" fill="none" stroke="var(--base)" stroke-width="1.2" stroke-dasharray="3 2"/>
+    <path d="${path(reports)}" fill="none" stroke="${col}" stroke-width="1.6"/>
+    <circle cx="${x(n - 1)}" cy="${y(reports[n - 1])}" r="2.5" fill="${col}"/></svg>`;
+}
+
+async function refresh() {
+  try {
+    const [h, rows, wl] = await Promise.all([api("health"), api("details"), api("watchlist")]);
+    $("#meta").innerHTML =
+      `<span>Source <b>${esc(h.backend)}</b></span><span>Last poll <b>${esc(ago(h.last_poll))}</b></span>` +
+      `<span>Targets <b>${h.targets}</b></span>` +
+      (h.last_error ? `<span class="err">Error: ${esc(h.last_error)}</span>` : "");
+    const active = rows.filter(r => r.state.active);
+    const worst = active.reduce((m, r) => r.state.ratio > (m?.state.ratio ?? 0) ? r : m, null);
+    $("#tiles").innerHTML = [
+      [active.length, "Active spikes", active.length > 0],
+      [rows.length, "Services watched"],
+      [worst ? worst.state.ratio + "×" : "—", worst ? "Worst: " + esc(worst.name) : "Worst ratio", !!worst],
+      [fmt(rows.reduce((a, r) => a + (r.state.current || 0), 0)), "Reports, last 15 min"],
+    ].map(([v, l, hot]) => `<div class="tile ${hot ? "hot" : ""}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+
+    $("#rows").innerHTML = rows.length ? rows.map(r => {
+      const s = r.state;
+      const pill = s.active ? `<span class="pill ${s.severity}">Spike · ${s.severity}</span>`
+                            : `<span class="pill none">Normal</span>`;
+      const dd = s.dd_status ? `<div class="sub">Downdetector: ${esc(s.dd_status)}</div>` : "";
+      const since = s.active && s.triggered_at ? `<div class="sub">since ${esc(ago(s.triggered_at))} · peak ${fmt(s.peak)}</div>` : "";
+      const reasons = s.active && s.reasons?.length ? `<div class="reasons">${esc(s.reasons.join(" · "))}</div>` : "";
+      const chips = (r.indicators || []).map(i => `<span>${esc(i.name)} ${fmt(i.count)}</span>`).join("");
+      return `<tr>
+        <td class="name"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.name)}</a>
+          <div class="sub">${esc(r.slug)}${r.city ? " · " + esc(r.city) : ""}${r.category ? " · " + esc(r.category) : ""}</div>${reasons}</td>
+        <td>${pill}${dd}${since}</td>
+        <td class="num">${fmt(s.current)}</td><td class="num">${fmt(s.baseline)}</td>
+        <td class="num">${s.ratio}×</td>
+        <td>${spark(r.reports, r.baseline, s.active)}</td>
+        <td class="chips hide-sm">${chips || '<span style="border:0">—</span>'}</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="empty">No data yet — add something to the watchlist or press “Poll now”.</td></tr>`;
+
+    $("#watch").innerHTML = wl.length ? wl.map(e => `<tr>
+        <td>${esc(e.kind)}</td>
+        <td>${esc(e.value)}${e.companies?.length ? `<div class="sub">${esc(e.companies.join(", "))}</div>` : ""}</td>
+        <td>${esc(e.country || "")}</td>
+        <td style="text-align:right"><button class="ghost" data-key="${esc(e.key)}">Remove</button></td></tr>`).join("")
+      : `<tr><td colspan="4" class="empty">Nothing watched yet.</td></tr>`;
+  } catch (e) {
+    $("#meta").innerHTML = `<span class="err">Can't reach the service: ${esc(e.message)}</span>`;
+  }
+}
+
+$("#watch").addEventListener("click", async ev => {
+  const key = ev.target.dataset?.key; if (!key) return;
+  if (!confirm("Stop watching " + key + "?")) return;
+  try { await api("watchlist?key=" + encodeURIComponent(key), { method: "DELETE" }); toast("Removed"); refresh(); }
+  catch (e) { toast("Remove failed: " + e.message); }
+});
+
+function syncKind() {
+  const k = $("#kind").value;
+  $("#cityFields").style.display = k === "city" ? "" : "none";
+  $("#valLbl").firstChild.textContent = { company: "Company slug or name ", url: "Website URL ", country: "Country code ", city: "City name " }[k];
+  $("#value").placeholder = { company: "att, entergy, chase…", url: "https://www.chase.com", country: "US", city: "Little Rock" }[k];
+}
+$("#kind").addEventListener("change", syncKind);
+
+async function addEntry(entry) {
+  const btn = $("#addBtn"); btn.disabled = true;
+  try {
+    await api("watchlist", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(entry) });
+    toast("Added — polling now"); setTimeout(refresh, 4000); refresh();
+  } catch (e) { toast("Add failed: " + e.message); }
+  finally { btn.disabled = false; }
+}
+$("#addBtn").addEventListener("click", () => {
+  const kind = $("#kind").value, value = $("#value").value.trim();
+  if (!value) return toast("Enter a value");
+  const entry = { kind, value };
+  const c = $("#country").value.trim().toUpperCase(); if (c) entry.country = c;
+  if (kind === "country") entry.value = value.toUpperCase();
+  if (kind === "city") {
+    entry.latitude = parseFloat($("#lat").value); entry.longitude = parseFloat($("#lon").value);
+    entry.companies = $("#cos").value.split(",").map(s => s.trim()).filter(Boolean);
+    if (isNaN(entry.latitude) || isNaN(entry.longitude) || !entry.companies.length)
+      return toast("City needs latitude, longitude and at least one company");
+  }
+  addEntry(entry); $("#value").value = "";
+});
+
+let qTimer;
+$("#q").addEventListener("input", () => {
+  clearTimeout(qTimer);
+  const q = $("#q").value.trim();
+  if (q.length < 2) { $("#results").innerHTML = ""; return; }
+  qTimer = setTimeout(async () => {
+    try {
+      const hits = await api("search?name=" + encodeURIComponent(q) + "&country=" + encodeURIComponent($("#country").value.trim()));
+      $("#results").innerHTML = hits.length ? hits.map(h => `<div><span><b>${esc(h.name)}</b> <span class="sub">${esc(h.slug)}</span></span>
+          <button class="ghost" style="color:var(--accent);border-color:var(--accent)" data-slug="${esc(h.slug)}" data-country="${esc(h.country_iso || "")}">Watch</button></div>`).join("")
+        : `<div class="empty">No matches</div>`;
+    } catch (e) { $("#results").innerHTML = `<div class="empty err">${esc(e.message)}</div>`; }
+  }, 350);
+});
+$("#results").addEventListener("click", ev => {
+  const slug = ev.target.dataset?.slug; if (!slug) return;
+  const entry = { kind: "company", value: slug };
+  if (ev.target.dataset.country) entry.country = ev.target.dataset.country;
+  addEntry(entry);
+});
+
+$("#pollBtn").addEventListener("click", async () => {
+  try { await api("poll", { method: "POST" }); toast("Poll queued"); setTimeout(refresh, 5000); }
+  catch (e) { toast("Poll failed: " + e.message); }
+});
+
+syncKind(); refresh(); setInterval(refresh, 60000);
+</script>
+</body>
+</html>

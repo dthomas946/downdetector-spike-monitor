@@ -353,6 +353,8 @@ class UnofficialBackend:
                 snaps.append(Snapshot(t, data["reports"][-96:], data["baseline"][-1],
                                       data["status"], {"category": data["category"],
                                                        "last_point": data["timestamps"][-1],
+                                                       "timestamps": data["timestamps"][-96:],
+                                                       "baseline_series": data["baseline"][-96:],
                                                        "indicators": data["indicators"],
                                                        "cities": data["cities"]}))
             except Exception as e:  # noqa: BLE001

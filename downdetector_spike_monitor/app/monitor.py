@@ -25,6 +25,7 @@ class Monitor:
         self.resolve_interval = resolve_interval
         self.targets: dict[str, Target] = {}
         self.states: dict[str, SpikeState] = {}
+        self.details: dict[str, dict] = {}       # uid -> series + extras for the UI
         self.last_poll: Optional[str] = None
         self.last_error: Optional[str] = None
         self._last_resolve = 0.0
@@ -74,6 +75,7 @@ class Monitor:
             for uid in list(self.states):
                 if uid not in new:
                     del self.states[uid]
+                    self.details.pop(uid, None)
         self._last_resolve = time.time()
         log.info("resolved %d targets from %d watchlist entries", len(new), len(self.watchlist.entries))
 
@@ -96,6 +98,17 @@ class Monitor:
             was_active, was_sev = st.active, st.severity
             evaluate(self.cfg, st, snap.stats_24, snap.baseline_current, snap.dd_status)
             self.states[t.uid] = st
+            self.details[t.uid] = {
+                "uid": t.uid, "name": t.name, "slug": t.slug, "url": t.url,
+                "country_iso": t.country_iso, "city": t.city, "source_entry": t.source_entry,
+                "reports": list(snap.stats_24[-96:]),
+                "baseline": snap.extra.get("baseline_series") or [snap.baseline_current] * len(snap.stats_24[-96:]),
+                "timestamps": snap.extra.get("timestamps", []),
+                "indicators": snap.extra.get("indicators", [])[:5],
+                "cities": snap.extra.get("cities", [])[:10],
+                "category": snap.extra.get("category", ""),
+                "state": st.to_dict(),
+            }
         self.publisher.publish_state(t, st)
         if st.active and not was_active:
             self.publisher.publish_event(t, st, "spike_started")
@@ -105,6 +118,13 @@ class Monitor:
             self.publisher.publish_event(t, st, "spike_cleared")
 
     # --------------------------------------------------------------- views
+    def details_view(self) -> list[dict]:
+        with self._lock:
+            rows = [dict(d, state=self.states[d["uid"]].to_dict()) for d in self.details.values()
+                    if d["uid"] in self.states]
+        rows.sort(key=lambda r: (not r["state"]["active"], -r["state"]["ratio"], r["name"].lower()))
+        return rows
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
