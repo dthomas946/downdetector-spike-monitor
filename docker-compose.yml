@@ -1,0 +1,20 @@
+services:
+  downdetector-spike-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.standalone
+    ports: ["8099:8099"]
+    environment:
+      BACKEND: unofficial            # or: enterprise (needs DD_CLIENT_ID/SECRET)
+      FLARESOLVERR_URL: ${FLARESOLVERR_URL:-}
+      DD_CLIENT_ID: ${DD_CLIENT_ID:-}
+      DD_CLIENT_SECRET: ${DD_CLIENT_SECRET:-}
+      POLL_INTERVAL: "300"
+      MQTT_HOST: ${MQTT_HOST:-}
+      MQTT_USER: ${MQTT_USER:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+      HA_WEBHOOK_URL: ${HA_WEBHOOK_URL:-}
+      WATCHLIST_FILE: /data/watchlist.yaml
+      OPTIONS_FILE: /nonexistent
+    volumes: ["./data:/data"]
+    restart: unless-stopped

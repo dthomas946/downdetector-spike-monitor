@@ -1,0 +1,43 @@
+name: Downdetector Spike Monitor
+version: "0.1.0"
+slug: downdetector_spike_monitor
+description: Alerts when user-reported outage spikes appear on Downdetector for companies, URLs, countries or cities you watch.
+url: https://github.com/dthomas946/downdetector-spike-monitor
+arch: [aarch64, amd64, armv7]
+startup: services
+init: false
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: REST API (status, spikes, watchlist)
+ingress: false
+map:
+  - share:rw
+services:
+  - mqtt:want
+options:
+  backend: unofficial
+  dd_client_id: ""
+  dd_client_secret: ""
+  flaresolverr_url: ""
+  poll_interval: 300
+  spike_ratio: 3.0
+  spike_z: 3.0
+  spike_min_reports: 20
+  spike_warn_on_warning: false
+  spike_clear_after: 2
+  ha_webhook_url: ""
+  log_level: INFO
+schema:
+  backend: list(enterprise|unofficial)
+  dd_client_id: str?
+  dd_client_secret: password?
+  flaresolverr_url: str?
+  poll_interval: int(60,3600)
+  spike_ratio: float(1.5,20)
+  spike_z: float(1,10)
+  spike_min_reports: int(1,10000)
+  spike_warn_on_warning: bool
+  spike_clear_after: int(1,10)
+  ha_webhook_url: str?
+  log_level: list(DEBUG|INFO|WARNING|ERROR)

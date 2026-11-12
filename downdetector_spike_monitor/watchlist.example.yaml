@@ -1,0 +1,32 @@
+# Slugs are the part after /status/ on downdetector.com — or just use a name/URL and
+# the service will look it up in the site's company directory.
+# Copy to /data/watchlist.yaml (add-on) or set WATCHLIST_FILE.
+# Everything here can also be managed live through the REST API (/watchlist).
+watch:
+  # --- Companies by Downdetector slug (the part after /status/ in the URL)
+  - kind: company
+    value: aws-amazon-web-services
+    country: US
+  - kind: company
+    value: att
+    country: US
+  - kind: company
+    value: entergy
+    country: US
+
+  # --- Websites: host name is used to find the matching company
+  - kind: url
+    value: https://www.chase.com
+
+  # --- Whole country: every company on that country's Downdetector site
+  #     (enterprise backend only; can be hundreds of targets — raise poll_interval)
+  # - kind: country
+  #   value: GB
+
+  # --- City: report counts filtered to a lat/lon (enterprise backend only)
+  - kind: city
+    value: Little Rock
+    latitude: 34.7465
+    longitude: -92.2896
+    country: US
+    companies: [att, xfinity, verizon]
