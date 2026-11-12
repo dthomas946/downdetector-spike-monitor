@@ -59,6 +59,7 @@ def settings() -> dict:
     return {
         "backend": g("backend", "unofficial"),
         "flaresolverr_url": g("flaresolverr_url", ""),
+        "request_spacing": g("request_spacing", 3.0, float),
         "dd_client_id": g("dd_client_id", ""),
         "dd_client_secret": g("dd_client_secret", ""),
         "dd_base_url": g("dd_base_url", "https://downdetectorapi.com/v2"),
@@ -81,7 +82,8 @@ def settings() -> dict:
 
 def build_monitor(cfg: dict) -> Monitor:
     if cfg["backend"] == "unofficial":
-        backend = UnofficialBackend(flaresolverr_url=cfg["flaresolverr_url"])
+        backend = UnofficialBackend(flaresolverr_url=cfg["flaresolverr_url"],
+                                    request_spacing=cfg["request_spacing"])
     else:
         if not cfg["dd_client_id"]:
             log.warning("DD_CLIENT_ID not set — enterprise backend will fail until configured")

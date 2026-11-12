@@ -10,6 +10,7 @@ detector and HA layer don't care where the numbers came from.
 """
 from __future__ import annotations
 
+import html as _html
 import json
 import logging
 import re
@@ -168,6 +169,10 @@ _INDICATOR_RE = re.compile(_Q + r"localizedName" + _Q + r":" + _Q + r"([^\"\\]+)
 _CITY_RE = re.compile(_Q + r"__typename" + _Q + r":" + _Q + r"CityType" + _Q + r"[^{}]*?" + _Q + r"name" + _Q + r":" + _Q + r"([^\"\\]+)" + _Q)
 
 
+class RateLimited(RuntimeError):
+    pass
+
+
 def _fetch_html(url: str, timeout: float = 25.0) -> str:
     """Fetch with a real-Chrome TLS fingerprint (curl_cffi) if available, else httpx.
     Cloudflare sits in front of downdetector.com; the browser-like fingerprint is
@@ -180,6 +185,8 @@ def _fetch_html(url: str, timeout: float = 25.0) -> str:
         r = httpx.get(url, timeout=timeout, follow_redirects=True,
                       headers={"User-Agent": UnofficialBackend.UA, "Accept-Language": "en-US,en"})
         status, text = r.status_code, r.text
+    if status == 429:
+        raise RateLimited(f"{url} -> 429: rate limited by Downdetector/Cloudflare")
     if status == 403 or "challenge-platform" in text[:20000]:
         raise RuntimeError(f"{url} -> {status}: Cloudflare challenge (install curl_cffi, "
                            "lower poll rate, or set FLARESOLVERR_URL)")
@@ -207,8 +214,11 @@ class UnofficialBackend:
           "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
     DIRECTORY_TTL = 24 * 3600
 
-    def __init__(self, flaresolverr_url: str = "", fetch=None):
+    def __init__(self, flaresolverr_url: str = "", fetch=None, request_spacing: float = 3.0,
+                 backoff: float = 30.0):
         self.flaresolverr_url = flaresolverr_url
+        self.request_spacing = request_spacing   # seconds between page fetches
+        self.backoff = backoff                   # wait before the single retry after a 429
         self._fetch = fetch                      # injectable for tests
         self._dir: dict[str, tuple[float, dict[str, str]]] = {}   # domain -> (ts, {slug: name})
 
@@ -230,7 +240,7 @@ class UnofficialBackend:
         if cached and time.time() - ts < self.DIRECTORY_TTL:
             return cached
         html = self.fetch(f"https://{dom}/companies/")
-        d = {slug: name for name, slug in _DIRECTORY_RE.findall(html)}
+        d = {slug: _html.unescape(name) for name, slug in _DIRECTORY_RE.findall(html)}
         if not d:
             log.warning("company directory parsed 0 entries from %s (layout changed?)", dom)
         self._dir[dom] = (time.time(), d)
@@ -255,7 +265,7 @@ class UnofficialBackend:
             "baseline": [int(b) for _, _, b in pts],
             "status": m_status.group(1) if m_status else ("danger" if pogo.get("outage") else ""),
             "company_id": int(m_co.group(1)) if m_co else 0,
-            "name": m_co.group(2) if m_co else "",
+            "name": _html.unescape(m_co.group(2)) if m_co else "",
             "category": pogo.get("category", ""),
             "indicators": [{"name": n, "count": int(c)} for n, c in _INDICATOR_RE.findall(html)],
             "cities": _CITY_RE.findall(html),
@@ -304,9 +314,17 @@ class UnofficialBackend:
     # ---------------------------------------------------------------- poll
     def poll(self, targets: list[Target]) -> list[Snapshot]:
         snaps = []
-        for t in targets:
+        for i, t in enumerate(targets):
+            if i and self.request_spacing:
+                time.sleep(self.request_spacing)
             try:
-                data = self.parse_page(self.fetch(t.url))
+                try:
+                    page = self.fetch(t.url)
+                except RateLimited:
+                    log.info("429 for %s; backing off %.0fs and retrying once", t.slug, self.backoff)
+                    time.sleep(self.backoff)
+                    page = self.fetch(t.url)
+                data = self.parse_page(page)
                 if not data["reports"]:
                     log.warning("no chart points parsed for %s (page layout changed?)", t.slug)
                     continue

@@ -190,3 +190,23 @@ def test_unofficial_end_to_end(tmp_path):
     assert s.active and s.severity == "danger" and s.current == 866 and s.company_id == 10147
     assert pub.events == [("aws-amazon-web-services", "spike_started", 866)]
     assert [h["slug"] for h in be.search("at")] [0] == "att"
+
+
+def test_unofficial_429_retry_and_unescape(tmp_path):
+    from app.backends import UnofficialBackend, RateLimited
+    calls = {"aws": 0}
+    def fetch(url):
+        if url.endswith("/companies/"):
+            return '<a title="AT&amp;T" href="/status/att/"></a>' + _fake_fetch(url)
+        if "aws-amazon-web-services" in url:
+            calls["aws"] += 1
+            if calls["aws"] == 1:
+                raise RateLimited("429")
+        return _fake_fetch(url)
+    be = UnofficialBackend(fetch=fetch, request_spacing=0, backoff=0)
+    assert be.directory("US")["att"] == "AT&T"
+    wl = Watchlist(tmp_path / "wl.yaml")
+    wl.add(WatchEntry(kind="company", value="aws-amazon-web-services"))
+    mon = Monitor(be, wl, NullPub(), SpikeConfig())
+    mon.run_once()
+    assert calls["aws"] == 2 and mon.states["aws-amazon-web-services"].active
