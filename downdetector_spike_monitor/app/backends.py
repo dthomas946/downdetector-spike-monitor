@@ -219,6 +219,11 @@ class UnofficialBackend:
         self.flaresolverr_url = flaresolverr_url
         self.request_spacing = request_spacing   # seconds between page fetches
         self.backoff = backoff                   # wait before the single retry after a 429
+        # circuit breaker: after a 429 that survives the retry, skip polling until
+        # cooldown_until; cooldown doubles each time (5 -> 10 -> 20 -> 60 min cap).
+        self.cooldown_min, self.cooldown_max = 300.0, 3600.0
+        self._cooldown = 0.0
+        self.cooldown_until = 0.0
         self._fetch = fetch                      # injectable for tests
         self._dir: dict[str, tuple[float, dict[str, str]]] = {}   # domain -> (ts, {slug: name})
 
@@ -313,6 +318,10 @@ class UnofficialBackend:
 
     # ---------------------------------------------------------------- poll
     def poll(self, targets: list[Target]) -> list[Snapshot]:
+        now = time.time()
+        if now < self.cooldown_until:
+            log.info("rate-limit cooldown: skipping poll for %.0f more seconds", self.cooldown_until - now)
+            return []
         snaps = []
         for i, t in enumerate(targets):
             if i and self.request_spacing:
@@ -323,8 +332,17 @@ class UnofficialBackend:
                 except RateLimited:
                     log.info("429 for %s; backing off %.0fs and retrying once", t.slug, self.backoff)
                     time.sleep(self.backoff)
-                    page = self.fetch(t.url)
+                    try:
+                        page = self.fetch(t.url)
+                    except RateLimited:
+                        self._cooldown = min(self.cooldown_max, max(self.cooldown_min, self._cooldown * 2))
+                        self.cooldown_until = time.time() + self._cooldown
+                        log.warning("still rate limited; pausing all polling for %.0f min "
+                                    "(%d of %d targets polled this cycle)",
+                                    self._cooldown / 60, len(snaps), len(targets))
+                        return snaps
                 data = self.parse_page(page)
+                self._cooldown = 0.0                 # healthy fetch resets the breaker
                 if not data["reports"]:
                     log.warning("no chart points parsed for %s (page layout changed?)", t.slug)
                     continue

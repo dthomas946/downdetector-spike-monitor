@@ -210,3 +210,23 @@ def test_unofficial_429_retry_and_unescape(tmp_path):
     mon = Monitor(be, wl, NullPub(), SpikeConfig())
     mon.run_once()
     assert calls["aws"] == 2 and mon.states["aws-amazon-web-services"].active
+
+
+def test_unofficial_circuit_breaker(tmp_path):
+    from app.backends import UnofficialBackend, RateLimited
+    hits = {"n": 0}
+    def fetch(url):
+        if url.endswith("/companies/"):
+            return _fake_fetch(url)
+        hits["n"] += 1
+        raise RateLimited("429")
+    be = UnofficialBackend(fetch=fetch, request_spacing=0, backoff=0)
+    wl = Watchlist(tmp_path / "wl.yaml")
+    for slug in ("aws-amazon-web-services", "att", "entergy"):
+        wl.add(WatchEntry(kind="company", value=slug))
+    mon = Monitor(be, wl, NullPub(), SpikeConfig())
+    mon.run_once()
+    assert hits["n"] == 2                    # first target + its retry, then stop
+    assert be.cooldown_until > 0 and be._cooldown == 300
+    mon.run_once()
+    assert hits["n"] == 2                    # still cooling down: no requests sent
