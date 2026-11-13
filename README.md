@@ -1,9 +1,34 @@
 # Downdetector Spike Monitor
 
-A small service that polls Downdetector for the companies, websites, countries and
-cities you care about, detects **spikes in user-reported problems**, exposes a REST
-API, and pushes alerts into **Home Assistant** (MQTT discovery entities + an event
-topic, or a webhook). Ships as a Home Assistant add-on.
+[![Open your Home Assistant instance and show the add app repository dialog with this repository URL pre-filled.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fdthomas946%2Fdowndetector-spike-monitor)
+[![Open your Home Assistant instance and show the Downdetector Spike Monitor app.](https://my.home-assistant.io/badges/supervisor_addon.svg)](https://my.home-assistant.io/redirect/supervisor_addon/?addon=acd19929_downdetector_spike_monitor&repository_url=https%3A%2F%2Fgithub.com%2Fdthomas946%2Fdowndetector-spike-monitor)
+
+A Home Assistant app that watches Downdetector for the companies, websites and countries you
+care about, detects **spikes in user-reported problems**, and alerts you in Home Assistant —
+including an hourly **national scan** that flags widespread outages and checks whether
+Cloudflare is the likely common cause.
+
+## Install
+
+1. Click **Add repository** above (or in Home Assistant go to *Settings → Apps → App store →
+   ⋮ → Repositories* and add `https://github.com/dthomas946/downdetector-spike-monitor`).
+2. Install **Downdetector Spike Monitor** and start it.
+3. Recommended:
+   - **Mosquitto broker** app + MQTT integration — creates the sensors and the
+     `downdetector/events` topic used for notifications.
+   - **FlareSolverr** app (from the [alexbelgium repository](https://github.com/alexbelgium/hassio-addons)) —
+     needed for the national scan; set the monitor's `flaresolverr_url` option to
+     `http://db21ed7f-flaresolverr:8191/v1`.
+4. Open **Downdetector** in the sidebar, add companies (search box) and a country (e.g. `US`).
+
+No Downdetector account is needed. If you have a Downdetector **Enterprise API** key, set
+`backend: enterprise` and your Client ID/Secret for full city-level data.
+
+> Unofficial project — not affiliated with or endorsed by Downdetector. The default backend
+> reads Downdetector's public web pages at a low rate (one national page per hour plus your
+> watched companies); please keep polling intervals reasonable.
+
+## How it works
 
 ```
  watchlist.yaml / REST ──► resolve ──► poll backend ──► spike detector ──► MQTT / webhook ──► HA
