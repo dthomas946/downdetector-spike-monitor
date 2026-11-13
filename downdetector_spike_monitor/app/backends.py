@@ -224,19 +224,38 @@ class FlareSolverr:
             raise RuntimeError(f"flaresolverr session: {body.get('message')}")
         self._session_ok = True
 
-    def get(self, url: str) -> str:
-        self._ensure_session()
-        body = self._call({"cmd": "request.get", "url": url, "session": self.SESSION,
-                           "maxTimeout": int(self.timeout * 1000)})
+    def _destroy_session(self):
+        try:
+            self._call({"cmd": "sessions.destroy", "session": self.SESSION})
+        except Exception:  # noqa: BLE001
+            pass
+        self._session_ok = False
+
+    def _request(self, url: str, use_session: bool) -> str:
+        payload = {"cmd": "request.get", "url": url, "maxTimeout": int(self.timeout * 1000)}
+        if use_session:
+            self._ensure_session()
+            payload["session"] = self.SESSION
+        body = self._call(payload)
         if body.get("status") != "ok":
-            msg = str(body.get("message"))
-            if "session" in msg.lower():
-                self._session_ok = False          # recreate next time
-            raise RuntimeError(f"flaresolverr: {msg}")
+            raise RuntimeError(f"flaresolverr: {body.get('message')}")
         sol = body["solution"]
         if int(sol.get("status") or 200) == 429:
             raise RateLimited(f"{url} -> 429 via flaresolverr")
         return sol["response"]
+
+    def get(self, url: str) -> str:
+        """Fetch through the persistent session; if that fails for any reason other than a
+        429 (crashed tab, dead session, unsolved challenge), throw the session away and
+        retry once in a fresh one."""
+        try:
+            return self._request(url, use_session=True)
+        except RateLimited:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.info("flaresolverr fetch failed (%s); recreating session and retrying once", e)
+            self._destroy_session()
+            return self._request(url, use_session=True)
 
 
 class UnofficialBackend:

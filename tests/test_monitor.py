@@ -317,3 +317,19 @@ def test_cloudflare_summary_parse():
             "components": [{"name": "CDN/Cache", "status": "major_outage"}, {"name": "DNS", "status": "operational"}]}
     r = check_cloudflare(get=lambda u: body)
     assert r["likely_cause"] and r["degraded_components"] == ["CDN/Cache"] and r["incidents"][0]["impact"] == "major"
+
+
+def test_flaresolverr_recovers_from_crashed_tab(monkeypatch):
+    from app.backends import FlareSolverr
+    calls = []
+    def fake_call(self, payload):
+        calls.append(payload["cmd"])
+        if payload["cmd"] == "request.get" and calls.count("request.get") == 1:
+            return {"status": "error", "message": "Error solving the challenge. Message: tab crashed"}
+        if payload["cmd"] == "request.get":
+            return {"status": "ok", "solution": {"status": 200, "response": "<html>ok</html>"}}
+        return {"status": "ok"}
+    monkeypatch.setattr(FlareSolverr, "_call", fake_call)
+    fs = FlareSolverr("http://x/v1")
+    assert fs.get("https://downdetector.com/") == "<html>ok</html>"
+    assert calls == ["sessions.create", "request.get", "sessions.destroy", "sessions.create", "request.get"]

@@ -1,5 +1,5 @@
 name: Downdetector Spike Monitor
-version: "0.4.1"
+version: "0.4.2"
 slug: downdetector_spike_monitor
 description: Alerts when user-reported outage spikes appear on Downdetector for companies, URLs, countries or cities you watch.
 url: https://github.com/dthomas946/downdetector-spike-monitor
