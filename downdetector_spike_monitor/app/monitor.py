@@ -14,7 +14,7 @@ from .backends import Backend, Snapshot
 from .ha_mqtt import HAPublisher
 from .national import (NationalState, WidespreadConfig, check_cloudflare, evaluate_widespread,
                        next_scan_time)
-from .spike import SpikeConfig, SpikeState, evaluate
+from .spike import SpikeConfig, SpikeState, evaluate, severity
 from .watchlist import Watchlist, Target
 
 log = logging.getLogger("dd.monitor")
@@ -52,6 +52,7 @@ class Monitor:
         self.national: dict[str, NationalState] = {}
         self.next_national_scan = next_scan_time(self.national_scan_minute)
         self._scan_now = threading.Event()
+        self.baselines: dict[str, list] = {}     # "<ISO>:<slug>" -> [[epoch, estimate], ...] (7 days)
         self.state_file = Path(state_file) if state_file else None
         self.load_state()
 
@@ -176,6 +177,7 @@ class Monitor:
                 "states": {uid: s.to_dict() for uid, s in self.states.items()},
                 "details": self.details,
                 "national": {iso: asdict(st) for iso, st in self.national.items()},
+                "baselines": self.baselines,
             }
         try:
             tmp = self.state_file.with_suffix(".tmp")
@@ -196,6 +198,7 @@ class Monitor:
             self.states = {uid: SpikeState(**d) for uid, d in data.get("states", {}).items()}
             self.details = data.get("details", {})
             self.national = {iso: NationalState(**d) for iso, d in data.get("national", {}).items()}
+            self.baselines = data.get("baselines", {})
             log.info("restored state: %d services (%d active spikes), %d national scans",
                      len(self.states), sum(s.active for s in self.states.values()), len(self.national))
         except Exception as e:  # noqa: BLE001
@@ -224,6 +227,7 @@ class Monitor:
             self.publisher.publish_national(st.summary())
             return st
         st.error = None
+        self._apply_learned_baselines(iso, rows)
         st.companies = rows
         st.scans += 1
         st.scanned_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -243,7 +247,8 @@ class Monitor:
                  len(affected), f", cloudflare={st.cloudflare.get('indicator')}" if st.cloudflare and st.widespread else "")
         summ = st.summary()
         watched = {t.slug for t in self.targets.values() if (t.country_iso or "US").upper() == iso}
-        summ["watched_in_list"] = [{k: c[k] for k in ("name", "slug", "status", "current", "last_hour_max")}
+        summ["watched_in_list"] = [{k: c.get(k) for k in ("name", "slug", "status", "current", "last_hour_max",
+                                                          "severity_level", "severity_score")}
                                    for c in rows if c["slug"] in watched]
         self.save_state()
         self.publisher.publish_national(summ)
@@ -252,6 +257,23 @@ class Monitor:
         elif was and not st.widespread:
             self.publisher.publish_raw_event({"event": "widespread_outage_cleared", **summ})
         return st
+
+    BASELINE_MEMORY = 7 * 24 * 3600
+
+    def _apply_learned_baselines(self, iso: str, rows: list[dict]):
+        """baseline_est := lowest 24 h-window estimate seen for this service in 7 days;
+        then score severity. Mutates rows in place."""
+        now = time.time()
+        for r in rows:
+            key = f"{iso}:{r['slug']}"
+            hist = [h for h in self.baselines.get(key, []) if now - h[0] < self.BASELINE_MEMORY]
+            hist.append([round(now), r["baseline_window"]])
+            self.baselines[key] = hist[-200:]
+            r["baseline_est"] = max(1, min(h[1] for h in hist))
+            r["severity_score"], r["severity_level"] = severity(r["current"], r["baseline_est"])
+        # drop services not seen for 7 days
+        for key in [k for k, v in self.baselines.items() if not v or now - v[-1][0] > self.BASELINE_MEMORY]:
+            del self.baselines[key]
 
     def _from_national(self, targets: list[Target]) -> list[Snapshot]:
         """Watched companies whose own page couldn't be fetched: use the latest national
@@ -297,7 +319,8 @@ class Monitor:
         with self._lock:
             rows = [dict(d, state=self.states[d["uid"]].to_dict()) for d in self.details.values()
                     if d["uid"] in self.states]
-        rows.sort(key=lambda r: (-(r["state"]["ratio"] or 0), r["name"].lower()))   # × normal, descending
+        rows.sort(key=lambda r: (-(r["state"].get("severity_score") or 0), -(r["state"]["ratio"] or 0),
+                                 r["name"].lower()))                    # severity, descending
         return rows
 
     def snapshot(self) -> dict:

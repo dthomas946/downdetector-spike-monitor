@@ -23,12 +23,29 @@ doesn't flap the alert.
 """
 from __future__ import annotations
 
+import math
 import statistics
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel
+
+
+# Severity: needs BOTH a large multiple of normal AND a meaningful number of extra
+# reports. 3x on a baseline of 15 (45 reports) scores ~2.4; 3x on 1,000 scores ~5.2;
+# a 26,000x outage with 129k reports scores ~75.
+SEVERITY_LEVELS = [(20, "critical"), (8, "major"), (3, "minor"), (1, "elevated"), (0, "normal")]
+
+
+def severity(current: float, baseline: float) -> tuple[float, str]:
+    baseline = max(1.0, float(baseline or 0))
+    current = float(current or 0)
+    if current <= baseline:
+        return 0.0, "normal"
+    score = math.log2(current / baseline) * math.log10(current - baseline + 1)
+    level = next(name for floor, name in SEVERITY_LEVELS if score >= floor)
+    return round(score, 1), level
 
 
 class SpikeConfig(BaseModel):
@@ -60,6 +77,8 @@ class SpikeState:
     zscore: float = 0.0
     dd_status: str = ""
     reasons: list[str] = field(default_factory=list)
+    severity_score: float = 0.0
+    severity_level: str = "normal"       # normal | elevated | minor | major | critical
     _quiet_polls: int = 0
     last_updated: Optional[str] = None
 
@@ -108,6 +127,7 @@ def evaluate(cfg: SpikeConfig, state: SpikeState, stats_24: list[int],
     state.ratio = round(ratio, 2)
     state.zscore = round(zscore, 2)
     state.dd_status = dd_status
+    state.severity_score, state.severity_level = severity(current, baseline)
     state.last_updated = _now()
 
     if spiking_now:

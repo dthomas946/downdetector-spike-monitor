@@ -386,3 +386,44 @@ def test_watched_spike_clears_when_it_drops_off_national_list(tmp_path):
     mon.run_national_scan("US")
     mon.run_once(); mon.run_once()
     assert not mon.states["outlook"].active and pub.events[-1][1] == "spike_cleared"
+
+
+# ------------------------------------------------------------------ severity
+def test_severity_needs_ratio_and_volume():
+    from app.spike import severity
+    small = severity(45, 15)            # 3x, small service
+    big = severity(3000, 1000)          # 3x, big service
+    busy = severity(30000, 20000)       # 1.5x on a huge base
+    total = severity(300, 10)           # 30x small service
+    outlook = severity(129476, 5)
+    assert small == (2.4, "elevated") and big[1] == "minor" and big[0] > small[0]
+    assert busy[1] == "elevated" and total[1] == "major" and outlook[1] == "critical"
+    assert severity(10, 15) == (0.0, "normal")
+
+
+def test_baseline_p20_resists_long_outage():
+    from app.national import estimate_baseline
+    # outage covers 70% of the older window: median would be huge, P20 stays low
+    spark = [5] * 25 + [20000] * 59 + [15000] * 12
+    assert estimate_baseline(spark) == 5
+
+
+def test_learned_baseline_keeps_7day_minimum(tmp_path):
+    from app.backends import UnofficialBackend
+    be = UnofficialBackend(fetch=_home_fetch, request_spacing=0, backoff=0)
+    pub = NullPub(); pub.publish_national = lambda s: None; pub.publish_raw_event = lambda p: None
+    mon = Monitor(be, Watchlist(tmp_path / "wl.yaml"), pub, SpikeConfig())
+    # Gmail's window estimate is 3 (its sparkline is quiet before the spike); pretend we saw
+    # a quieter day earlier this week, and a polluted (outage-filled) one for Outlook.
+    mon.baselines["US:gmail"] = [[int(time.time()) - 86400, 1]]
+    mon.baselines["US:outlook"] = [[int(time.time()) - 3600, 9000]]
+    st = mon.run_national_scan("US")
+    g = next(c for c in st.companies if c["slug"] == "gmail")
+    o = next(c for c in st.companies if c["slug"] == "outlook")
+    assert g["baseline_window"] == 3 and g["baseline_est"] == 1          # 7-day minimum wins
+    assert o["baseline_est"] == o["baseline_window"] < 9000               # polluted history ignored
+    assert o["severity_level"] == "critical"
+    assert all("severity_score" in c for c in st.companies)
+    # sorted by severity: outlook first among the >1000 rows in the UI; check score ordering sanity
+    m365 = next(c for c in st.companies if c["slug"] == "microsoft-365")
+    assert o["severity_score"] > m365["severity_score"]

@@ -84,6 +84,24 @@ whenever they appear in it.
 **FlareSolverr** (`flaresolverr_url`) is used for the homepage and the company directory; it
 gets those through Cloudflare reliably. Individual status pages are fetched directly.
 
+## Severity
+Both tables sort by a **severity score** that needs a large multiple of normal *and* a meaningful
+number of extra reports, so 3× on a tiny service doesn't outrank 3× on a big one:
+
+    score = log2(reports / normal) × log10(reports − normal + 1)
+
+| level | score | e.g. |
+|---|---|---|
+| Critical | ≥ 20 | 129,476 vs normal 5 → 75 |
+| Major | ≥ 8 | 300 vs 10 → 12 |
+| Minor | ≥ 3 | 3,000 vs 1,000 → 5.2 |
+| Elevated | ≥ 1 | 45 vs 15 → 2.4 |
+| Normal | < 1 | |
+
+"Normal" for national-scan services is the 20th percentile of the 24 h sparkline (excluding the
+last 3 h), and the lowest such estimate seen in the past 7 days — so a day-long outage can't
+become the new normal.
+
 ## Dashboard
 Open **Downdetector** in the Home Assistant sidebar (Ingress panel), or `http://<HA>:8099/` directly.
 It shows active spikes, a 24-hour reports-vs-baseline chart and top reported problems per

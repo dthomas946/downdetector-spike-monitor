@@ -48,6 +48,13 @@
   .pill.warning { background: var(--warn-bg); color: var(--warn); }
   .pill.none, .pill.success { background: var(--ok-bg); color: var(--ok); }
   .pill.unknown { background: var(--line); color: var(--muted); }
+  .sev { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 650;
+         white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .sev.critical { background: var(--danger); color: #fff; }
+  .sev.major { background: var(--danger-bg); color: var(--danger); }
+  .sev.minor { background: var(--warn-bg); color: var(--warn); }
+  .sev.elevated { background: var(--line); color: var(--ink); }
+  .sev.normal { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   .chips span { display: inline-block; font-size: 12px; padding: 1px 7px; margin: 2px 4px 2px 0;
                 border: 1px solid var(--line); border-radius: 6px; color: var(--muted); }
   svg.spark { display: block; }
@@ -98,8 +105,8 @@
     <div id="natBanner"></div>
     <div style="overflow-x:auto;max-height:520px;overflow-y:auto">
       <table>
-        <thead><tr><th>#</th><th>Service</th><th>Downdetector</th><th class="num">Reports</th>
-          <th class="num">Peak 24 h</th><th class="num">× normal ▼</th><th>Last 24 h</th></tr></thead>
+        <thead><tr><th>#</th><th>Service</th><th>Severity ▼</th><th>Downdetector</th><th class="num">Reports</th>
+          <th class="num">Normal</th><th class="num">× normal</th><th class="num">Peak 24 h</th><th>Last 24 h</th></tr></thead>
         <tbody id="natRows"></tbody>
       </table>
     </div>
@@ -115,10 +122,10 @@
     <div style="overflow-x:auto">
       <table>
         <thead><tr>
-          <th>Service</th><th>State</th><th class="num">Reports</th><th class="num">Baseline</th>
-          <th class="num">× normal ▼</th><th>Last 24 h</th><th class="hide-sm">Top problems</th>
+          <th>Service</th><th title="">Severity ▼</th><th>State</th><th class="num">Reports</th><th class="num">Baseline</th>
+          <th class="num">× normal</th><th>Last 24 h</th><th class="hide-sm">Top problems</th>
         </tr></thead>
-        <tbody id="rows"><tr><td colspan="7" class="empty">Waiting for first poll…</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="8" class="empty">Waiting for first poll…</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -177,6 +184,13 @@ function ago(iso) {
   return Math.round(s / 3600) + " h ago";
 }
 
+const SEV_HELP = "Severity = log2(× normal) × log10(extra reports + 1). Needs both a big multiple and real volume. " +
+  "Critical ≥ 20 · Major ≥ 8 · Minor ≥ 3 · Elevated ≥ 1";
+function sevPill(level, score) {
+  level = level || "normal";
+  return `<span class="sev ${esc(level)}" title="${esc(SEV_HELP)}">${esc(level[0].toUpperCase() + level.slice(1))}${score ? " · " + Number(score).toFixed(1) : ""}</span>`;
+}
+
 function spark(reports, baseline, active) {
   const W = 220, H = 44, n = reports.length;
   if (!n) return "";
@@ -223,12 +237,13 @@ async function refresh() {
       return `<tr>
         <td class="name"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.name)}</a>
           <div class="sub">${esc(r.slug)}${r.city ? " · " + esc(r.city) : ""}${r.category ? " · " + esc(r.category) : ""}</div>${reasons}</td>
+        <td>${sevPill(s.severity_level, s.severity_score)}</td>
         <td>${pill}${dd}${since}</td>
         <td class="num">${fmt(s.current)}</td><td class="num">${fmt(s.baseline)}</td>
         <td class="num">${s.ratio}×</td>
         <td>${spark(r.reports, r.baseline, s.active)}</td>
         <td class="chips hide-sm">${chips || '<span style="border:0">—</span>'}</td></tr>`;
-    }).join("") : `<tr><td colspan="7" class="empty">No data yet — add something to the watchlist or press “Poll now”.</td></tr>`;
+    }).join("") : `<tr><td colspan="8" class="empty">No data yet — add something to the watchlist or press “Poll now”.</td></tr>`;
 
     $("#watch").innerHTML = wl.length ? wl.map(e => `<tr>
         <td>${esc(e.kind)}</td>
@@ -264,7 +279,7 @@ function renderNational(list) {
   const all = n.companies || [];
   const ratioOf = c => c.baseline_est ? c.current / c.baseline_est : 0;
   const shown = (natShowAll ? all.slice() : all.filter(c => c.last_hour_max > minR))
-    .sort((a, b) => ratioOf(b) - ratioOf(a));                    // × normal, descending
+    .sort((a, b) => (b.severity_score || 0) - (a.severity_score || 0) || ratioOf(b) - ratioOf(a));   // severity, descending
   const hidden = all.length - shown.length;
   $("#natRows").innerHTML = shown.map(c => {
     const hot = n.affected && n.affected.some(a => a.slug === c.slug);
@@ -272,11 +287,13 @@ function renderNational(list) {
     return `<tr><td class="sub">${c.rank}</td>
       <td class="name"><a href="https://downdetector.com/status/${esc(c.slug)}/" target="_blank" rel="noopener">${esc(c.name)}</a>
         <div class="sub">${esc(c.category.replace(/-/g, " "))}</div></td>
+      <td>${sevPill(c.severity_level, c.severity_score)}</td>
       <td><span class="pill ${esc(c.status || "unknown")}">${esc(c.status || "?")}</span></td>
-      <td class="num">${fmt(c.current)}</td><td class="num">${fmt(c.peak_24h)}</td>
-      <td class="num">${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}×</td>
+      <td class="num">${fmt(c.current)}</td><td class="num">${fmt(c.baseline_est)}</td>
+      <td class="num">${ratio >= 10 ? fmt(Math.round(ratio)) : ratio.toFixed(1)}×</td>
+      <td class="num">${fmt(c.peak_24h)}</td>
       <td>${spark(c.sparkline, new Array(c.sparkline.length).fill(c.baseline_est), hot)}</td></tr>`;
-  }).join("") || `<tr><td colspan="7" class="empty">${all.length ? `No service over ${fmt(minR)} reports in the last hour.` : "Waiting for the first scan."}</td></tr>`;
+  }).join("") || `<tr><td colspan="9" class="empty">${all.length ? `No service over ${fmt(minR)} reports in the last hour.` : "Waiting for the first scan."}</td></tr>`;
   $("#natMore").innerHTML = all.length && (hidden || natShowAll)
     ? `<a href="#" id="natToggle">${natShowAll ? `Show only services over ${fmt(minR)} reports` : `Show all ${all.length} listed services (${hidden} under ${fmt(minR)} reports hidden)`}</a>` : "";
 }

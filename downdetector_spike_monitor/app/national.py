@@ -74,6 +74,7 @@ def parse_homepage(html: str) -> list[dict]:
             "current": spark[-1] if spark else 0,
             "last_hour_max": max(spark[-4:]) if spark else 0,
             "peak_24h": max(spark) if spark else 0,
+            "baseline_window": estimate_baseline(spark),
             "baseline_est": estimate_baseline(spark),
             "calculated_at": get("calc"),
             "correlation": None if corr in ("", "null") else corr[:400],
@@ -82,10 +83,14 @@ def parse_homepage(html: str) -> list[dict]:
 
 
 def estimate_baseline(spark: list[int]) -> int:
-    """The homepage has no baseline series; use the median of the older part of the
-    24 h window (excluding the most recent 3 h) as 'normal' for this time of day."""
-    hist = spark[:-12] if len(spark) > 24 else spark
-    return max(1, int(statistics.median(hist))) if hist else 1
+    """The homepage has no baseline series. Estimate 'normal' as the 20th percentile of
+    the 24 h window, excluding the most recent 3 h: an outage that fills up to ~80% of
+    the window doesn't drag it up (the median did). The monitor additionally keeps the
+    lowest estimate seen over 7 days, so a day-long outage can't become 'normal'."""
+    hist = sorted(spark[:-12] if len(spark) > 24 else spark)
+    if not hist:
+        return 1
+    return max(1, int(hist[int(0.2 * (len(hist) - 1))]))
 
 
 # --------------------------------------------------------------- cloudflare
@@ -157,8 +162,9 @@ class NationalState:
             "total_reports_15m": sum(c["current"] for c in self.companies),
             "top_service": top["name"] if top else None,
             "top_service_reports": top["current"] if top else 0,
-            "affected": [{k: c[k] for k in ("name", "slug", "category", "status", "current",
-                                             "last_hour_max", "baseline_est")} for c in self.affected],
+            "affected": [{k: c.get(k) for k in ("name", "slug", "category", "status", "current",
+                                                 "last_hour_max", "baseline_est", "severity_level",
+                                                 "severity_score")} for c in self.affected],
             "cloudflare": self.cloudflare,
         }
 
