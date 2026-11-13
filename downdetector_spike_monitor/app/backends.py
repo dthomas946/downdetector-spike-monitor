@@ -204,7 +204,7 @@ class FlareSolverr:
 
     SESSION = "downdetector-spike-monitor"
 
-    def __init__(self, url: str, timeout: float = 60.0):
+    def __init__(self, url: str, timeout: float = 90.0):
         self.url = url
         self.timeout = timeout
         self._session_ok = False
