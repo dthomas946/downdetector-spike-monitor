@@ -358,3 +358,31 @@ def test_restart_does_not_reannounce(tmp_path, monkeypatch):
     assert m2.states["aws-amazon-web-services"].active and m2.national["US"].widespread
     m2.run_national_scan("US"); m2.run_once()
     assert raw2 == [] and pub2.events == []           # nothing re-announced
+
+
+def test_watched_spike_clears_when_it_drops_off_national_list(tmp_path):
+    from app.backends import UnofficialBackend, RateLimited
+    home = (FIX / "homepage_2026-11-12.html").read_text()
+    pages = {"home": home}
+    def site(u):
+        return '<a title="Microsoft Outlook" href="/status/outlook/"></a>' if u.endswith("/companies/") else pages["home"]
+    def fetch(u):
+        raise RateLimited("429")
+    be = UnofficialBackend(fetch=fetch, site_fetch=site, request_spacing=0, backoff=0)
+    be.cooldown_min = 0
+    wl = Watchlist(tmp_path / "wl.yaml")
+    wl.add(WatchEntry(kind="country", value="US"))
+    wl.add(WatchEntry(kind="company", value="outlook", country="US"))
+    pub = NullPub(); nat = []
+    pub.publish_national = lambda s: nat.append(s)
+    pub.publish_raw_event = lambda p: None
+    mon = Monitor(be, wl, pub, SpikeConfig(clear_after=2))
+    mon.run_once(); mon.run_national_scan("US"); mon.run_once()
+    assert mon.states["outlook"].active and pub.events[-1] == ("outlook", "spike_started", 30268)
+    assert nat[-1]["watched_in_list"][0]["slug"] == "outlook"
+    # Outlook recovers and drops out of the top list
+    pages["home"] = home.split('{\\"__typename\\":\\"CompanyType\\",\\"id\\":\\"10205\\"')[0] + \
+        '{\\"__typename\\":\\"CompanyType\\",\\"id\\":\\"34532' + home.split('{\\"__typename\\":\\"CompanyType\\",\\"id\\":\\"34532')[1]
+    mon.run_national_scan("US")
+    mon.run_once(); mon.run_once()
+    assert not mon.states["outlook"].active and pub.events[-1][1] == "spike_cleared"

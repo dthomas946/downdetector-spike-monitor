@@ -20,6 +20,11 @@ from .watchlist import Watchlist, Target
 log = logging.getLogger("dd.monitor")
 
 
+def _iso_epoch(s: str) -> float:
+    import calendar
+    return calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+
+
 class Monitor:
     def __init__(self, backend: Backend, watchlist: Watchlist, publisher: HAPublisher,
                  spike_cfg: SpikeConfig, poll_interval: int = 300, resolve_interval: int = 3600,
@@ -237,6 +242,9 @@ class Monitor:
                  iso, len(rows), sum(r["status"] == "danger" for r in rows), st.widespread,
                  len(affected), f", cloudflare={st.cloudflare.get('indicator')}" if st.cloudflare and st.widespread else "")
         summ = st.summary()
+        watched = {t.slug for t in self.targets.values() if (t.country_iso or "US").upper() == iso}
+        summ["watched_in_list"] = [{k: c[k] for k in ("name", "slug", "status", "current", "last_hour_max")}
+                                   for c in rows if c["slug"] in watched]
         self.save_state()
         self.publisher.publish_national(summ)
         if st.widespread and not was:
@@ -258,6 +266,17 @@ class Monitor:
                 out.append(Snapshot(t, row["sparkline"][-96:], row["baseline_est"], row["status"],
                                     {"category": row["category"], "source": "national_scan",
                                      "scanned_at": st.scanned_at}))
+                continue
+            # Not in a fresh national list while we think it's spiking: it now has fewer
+            # reports than the lowest-ranked listed service, so feed that upper bound in and
+            # let the normal hysteresis clear the spike (otherwise it could never clear).
+            cur = self.states.get(t.uid)
+            fresh = st.scanned_at and (time.time() - _iso_epoch(st.scanned_at)) < 2 * 3600
+            if cur and cur.active and fresh and not st.error:
+                floor = min(min(c["current"] for c in st.companies), self.cfg.absolute_min_reports - 1)
+                prev = (self.details.get(t.uid) or {}).get("reports") or []
+                out.append(Snapshot(t, (prev[1:] + [floor])[-96:] or [floor], cur.baseline, "",
+                                    {"source": "national_scan_absent", "scanned_at": st.scanned_at}))
         return out
 
     def national_view(self) -> list[dict]:
