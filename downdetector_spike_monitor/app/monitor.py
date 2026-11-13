@@ -272,7 +272,7 @@ class Monitor:
             # floor = same min_baseline as watched companies: overnight zeros otherwise make
             # "normal" 1 and inflate every small service's severity
             r["baseline_est"] = max(self.cfg.min_baseline, min(h[1] for h in hist))
-            r["severity_score"], r["severity_level"] = severity(r["current"], r["baseline_est"])
+            r["severity_score"], r["severity_level"] = severity(r["current"], r["baseline_est"], r["status"])
         # drop services not seen for 7 days
         for key in [k for k, v in self.baselines.items() if not v or now - v[-1][0] > self.BASELINE_MEMORY]:
             del self.baselines[key]

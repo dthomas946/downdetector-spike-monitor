@@ -185,7 +185,7 @@ function ago(iso) {
 }
 
 const SEV_HELP = "Severity = log2(× normal) × log10(extra reports + 1). Needs both a big multiple and real volume. " +
-  "Critical ≥ 20 · Major ≥ 8 · Minor ≥ 3 · Elevated ≥ 1";
+  "Critical ≥ 20 · Major ≥ 8 · Minor ≥ 3 · Elevated ≥ 1. Downdetector 'danger' is at least Minor, 'warning' at least Elevated.";
 function sevPill(level, score) {
   level = level || "normal";
   return `<span class="sev ${esc(level)}" title="${esc(SEV_HELP)}">${esc(level[0].toUpperCase() + level.slice(1))}${score ? " · " + Number(score).toFixed(1) : ""}</span>`;

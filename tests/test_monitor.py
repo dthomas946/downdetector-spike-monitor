@@ -437,3 +437,10 @@ def test_national_baseline_floor(tmp_path):
     mon = Monitor(be, Watchlist(tmp_path / "wl.yaml"), pub, SpikeConfig(min_baseline=5))
     st = mon.run_national_scan("US")
     assert min(c["baseline_est"] for c in st.companies) >= 5
+
+
+def test_dd_status_floors_severity():
+    from app.spike import severity
+    assert severity(1146, 4369, "danger") == (3.0, "minor")      # polluted baseline, DD says danger
+    assert severity(10, 15, "warning") == (1.0, "elevated")
+    assert severity(2558, 5, "danger")[1] == "critical"            # floor never lowers a score

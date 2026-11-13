@@ -38,12 +38,18 @@ from pydantic import BaseModel
 SEVERITY_LEVELS = [(20, "critical"), (8, "major"), (3, "minor"), (1, "elevated"), (0, "normal")]
 
 
-def severity(current: float, baseline: float) -> tuple[float, str]:
+# Downdetector's own status uses a year of history, so it sets a floor when our
+# 'normal' estimate is polluted by a long outage (e.g. a day-long one fills the window).
+DD_STATUS_FLOOR = {"danger": 3.0, "warning": 1.0}
+
+
+def severity(current: float, baseline: float, dd_status: str = "") -> tuple[float, str]:
     baseline = max(1.0, float(baseline or 0))
     current = float(current or 0)
-    if current <= baseline:
-        return 0.0, "normal"
-    score = math.log2(current / baseline) * math.log10(current - baseline + 1)
+    score = 0.0
+    if current > baseline:
+        score = math.log2(current / baseline) * math.log10(current - baseline + 1)
+    score = max(score, DD_STATUS_FLOOR.get((dd_status or "").lower(), 0.0))
     level = next(name for floor, name in SEVERITY_LEVELS if score >= floor)
     return round(score, 1), level
 
@@ -127,7 +133,7 @@ def evaluate(cfg: SpikeConfig, state: SpikeState, stats_24: list[int],
     state.ratio = round(ratio, 2)
     state.zscore = round(zscore, 2)
     state.dd_status = dd_status
-    state.severity_score, state.severity_level = severity(current, baseline)
+    state.severity_score, state.severity_level = severity(current, baseline, dd_status)
     state.last_updated = _now()
 
     if spiking_now:
