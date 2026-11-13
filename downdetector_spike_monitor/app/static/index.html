@@ -73,6 +73,7 @@
   .banner { border-radius: 10px; padding: 10px 14px; margin: 4px 0 12px; font-size: 13px; }
   .banner.on { background: var(--danger-bg); color: var(--danger); }
   .banner.off { background: var(--ok-bg); color: var(--ok); }
+  #natMore a { color: var(--accent); text-decoration: none; }
   .banner a { color: inherit; }
   .legend { font-size: 12px; color: var(--muted); display: flex; gap: 14px; }
   .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 5px; }
@@ -102,6 +103,7 @@
         <tbody id="natRows"></tbody>
       </table>
     </div>
+    <div class="sub" id="natMore" style="margin-top:8px"></div>
   </section>
 
   <section class="card">
@@ -258,7 +260,11 @@ function renderNational(list) {
         `${n.affected.length} services at danger with 1,000+ reports/15 min — ${esc(n.affected.map(a => a.name).join(", "))}. ${cfTxt}</div>`;
   } else if (n.scanned_at) b = `<div class="banner off">No widespread outage. ${n.services_in_danger} of ${n.services_listed} listed services at danger.</div>`;
   $("#natBanner").innerHTML = b;
-  $("#natRows").innerHTML = (n.companies || []).map(c => {
+  const minR = n.list_min_reports || 1000;
+  const all = n.companies || [];
+  const shown = natShowAll ? all : all.filter(c => c.last_hour_max > minR);
+  const hidden = all.length - shown.length;
+  $("#natRows").innerHTML = shown.map(c => {
     const hot = n.affected && n.affected.some(a => a.slug === c.slug);
     const ratio = c.baseline_est ? (c.current / c.baseline_est) : 0;
     return `<tr><td class="sub">${c.rank}</td>
@@ -268,8 +274,15 @@ function renderNational(list) {
       <td class="num">${fmt(c.current)}</td><td class="num">${fmt(c.peak_24h)}</td>
       <td class="num">${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}×</td>
       <td>${spark(c.sparkline, new Array(c.sparkline.length).fill(c.baseline_est), hot)}</td></tr>`;
-  }).join("") || `<tr><td colspan="7" class="empty">Waiting for the first scan.</td></tr>`;
+  }).join("") || `<tr><td colspan="7" class="empty">${all.length ? `No service over ${fmt(minR)} reports in the last hour.` : "Waiting for the first scan."}</td></tr>`;
+  $("#natMore").innerHTML = all.length && (hidden || natShowAll)
+    ? `<a href="#" id="natToggle">${natShowAll ? `Show only services over ${fmt(minR)} reports` : `Show all ${all.length} listed services (${hidden} under ${fmt(minR)} reports hidden)`}</a>` : "";
 }
+let natShowAll = false;
+document.addEventListener("click", ev => {
+  if (ev.target.id !== "natToggle") return;
+  ev.preventDefault(); natShowAll = !natShowAll; refresh();
+});
 
 $("#scanBtn").addEventListener("click", async () => {
   try { await api("scan", { method: "POST" }); toast("Scan queued — takes ~10 s"); setTimeout(refresh, 12000); }

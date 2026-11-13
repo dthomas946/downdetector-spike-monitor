@@ -217,6 +217,7 @@ class Monitor:
         for iso, st in sorted(self.national.items()):
             d = st.summary()
             d["companies"] = st.companies
+            d["list_min_reports"] = self.wcfg.min_reports
             d["next_scan"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.next_national_scan))
             out.append(d)
         for iso in self.countries():
