@@ -197,3 +197,7 @@ integration (config flow UI for adding countries/cities/URLs, no MQTT), `dd_clie
 ```bash
 python -m pytest tests -q
 ```
+
+## License
+
+[MIT](LICENSE) © 2026 Darin Thomas
