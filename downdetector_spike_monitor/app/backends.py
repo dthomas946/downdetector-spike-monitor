@@ -245,17 +245,22 @@ class FlareSolverr:
         return sol["response"]
 
     def get(self, url: str) -> str:
-        """Fetch through the persistent session; if that fails for any reason other than a
-        429 (crashed tab, dead session, unsolved challenge), throw the session away and
-        retry once in a fresh one."""
+        """One-off fetch: FlareSolverr starts a fresh browser and closes it afterwards.
+        (A persistent session kept the homepage's ad/tracker scripts running between scans,
+        grew to ~2.4 GB and crashed its tab, so sessions are not used.) Retries once on a
+        non-429 failure."""
         try:
-            return self._request(url, use_session=True)
+            return self._request(url, use_session=False)
         except RateLimited:
             raise
         except Exception as e:  # noqa: BLE001
-            log.info("flaresolverr fetch failed (%s); recreating session and retrying once", e)
-            self._destroy_session()
-            return self._request(url, use_session=True)
+            log.info("flaresolverr fetch failed (%s); retrying once", e)
+            time.sleep(5)
+            return self._request(url, use_session=False)
+
+    def cleanup(self):
+        """Destroy any session left over from older versions."""
+        self._destroy_session()
 
 
 class UnofficialBackend:
@@ -268,6 +273,8 @@ class UnofficialBackend:
                  backoff: float = 30.0, site_fetch=None):
         self.flaresolverr_url = flaresolverr_url
         self._flaresolverr = FlareSolverr(flaresolverr_url) if flaresolverr_url else None
+        if self._flaresolverr and not fetch and not site_fetch:
+            self._flaresolverr.cleanup()
         self._site_fetch = site_fetch            # injectable for tests (homepage / directory)
         self.request_spacing = request_spacing   # seconds between page fetches
         self.backoff = backoff                   # wait before the single retry after a 429

@@ -321,6 +321,7 @@ def test_cloudflare_summary_parse():
 
 def test_flaresolverr_recovers_from_crashed_tab(monkeypatch):
     from app.backends import FlareSolverr
+    monkeypatch.setattr("app.backends.time.sleep", lambda s: None)
     calls = []
     def fake_call(self, payload):
         calls.append(payload["cmd"])
@@ -332,4 +333,4 @@ def test_flaresolverr_recovers_from_crashed_tab(monkeypatch):
     monkeypatch.setattr(FlareSolverr, "_call", fake_call)
     fs = FlareSolverr("http://x/v1")
     assert fs.get("https://downdetector.com/") == "<html>ok</html>"
-    assert calls == ["sessions.create", "request.get", "sessions.destroy", "sessions.create", "request.get"]
+    assert calls == ["request.get", "request.get"]            # no persistent session
