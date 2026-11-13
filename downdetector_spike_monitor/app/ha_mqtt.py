@@ -109,6 +109,54 @@ class HAPublisher:
         uid = t.uid.replace("@", "_").replace("-", "_")
         self._pub(f"{self.base}/{uid}/state", s.to_dict(), retain=True)
 
+    # -------------------------------------------------------- national scan
+    def publish_national(self, summ: dict):
+        iso = (summ.get("country") or "US").lower()
+        uid = f"national_{iso}"
+        state_topic = f"{self.base}/{uid}/state"
+        if uid not in self._announced:
+            device = {"identifiers": [f"downdetector_{uid}"],
+                      "name": f"Downdetector National ({iso.upper()})",
+                      "manufacturer": "Downdetector", "model": "National scan"}
+            common = {"device": device, "availability_topic": f"{self.base}/availability",
+                      "state_topic": state_topic}
+            comps = {
+                ("binary_sensor", "widespread_outage"): {
+                    "name": "Widespread outage", "device_class": "problem",
+                    "value_template": "{{ 'ON' if value_json.widespread else 'OFF' }}",
+                    "json_attributes_topic": state_topic,
+                    "json_attributes_template": "{{ {'affected': value_json.affected, 'cloudflare': value_json.cloudflare, 'since': value_json.widespread_since, 'scanned_at': value_json.scanned_at} | tojson }}",
+                },
+                ("sensor", "services_in_danger"): {
+                    "name": "Services in danger", "state_class": "measurement", "icon": "mdi:alert",
+                    "value_template": "{{ value_json.services_in_danger }}"},
+                ("sensor", "top_service"): {
+                    "name": "Most reported service", "icon": "mdi:podium-gold",
+                    "value_template": "{{ value_json.top_service or 'none' }}"},
+                ("sensor", "top_service_reports"): {
+                    "name": "Most reported service reports", "state_class": "measurement",
+                    "icon": "mdi:counter", "value_template": "{{ value_json.top_service_reports }}"},
+                ("sensor", "cloudflare_status"): {
+                    "name": "Cloudflare status (at last widespread check)", "icon": "mdi:cloud-alert",
+                    "value_template": "{{ (value_json.cloudflare or {}).get('indicator', 'not checked') }}"},
+            }
+            for (comp, key), cfg in comps.items():
+                cfg.update(common)
+                cfg["unique_id"] = f"downdetector_{uid}_{key}"
+                self._pub(f"{self.disc}/{comp}/downdetector_{uid}/{key}/config", cfg, retain=True)
+            self._announced.add(uid)
+        self._pub(state_topic, summ, retain=True)
+
+    def publish_raw_event(self, payload: dict):
+        self._pub(f"{self.base}/events", payload)
+        if self.webhook_url:
+            try:
+                httpx.post(self.webhook_url, json=payload, timeout=10)
+            except Exception as e:  # noqa: BLE001
+                log.warning("webhook post failed: %s", e)
+        log.info("EVENT %s %s", payload.get("event"),
+                 {k: payload.get(k) for k in ("country", "services_in_danger", "top_service")})
+
     # --------------------------------------------------------------- events
     def publish_event(self, t: Target, s: SpikeState, kind: str):
         """kind: 'spike_started' | 'spike_cleared' | 'spike_escalated'"""

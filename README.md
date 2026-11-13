@@ -64,6 +64,26 @@ Auth is `POST /v2/tokens?grant_type=client_credentials` with HTTP Basic
 (Client ID / Secret), then `Authorization: Bearer …`. One bulk `GET /v2/companies?ids=…`
 per poll covers every watched company.
 
+## National scan & widespread outages
+Add a `country` entry (e.g. `US`). Instead of polling ~2,900 company pages, the add-on
+fetches that country's Downdetector **homepage once an hour at HH:`national_scan_minute`**
+(default :00). The homepage lists the ~47 most-reported services nationwide, each with
+Downdetector's status and a 24 h report sparkline — any service with a real outage shows up there.
+
+A **widespread outage** is declared when ≥ `widespread_min_services` (3) services are at
+`danger` with ≥ `widespread_min_reports` (1,000) reports in a 15-min bucket within the last hour.
+When that happens (and on each hourly scan while it lasts) the add-on checks
+**Cloudflare's public status API** and reports whether Cloudflare has a major incident —
+i.e. whether it's the likely common cause. Events `widespread_outage_started` /
+`widespread_outage_cleared` go to `downdetector/events`; entities appear under the device
+*Downdetector National (US)*. `POST /scan` (or **Scan now** in the dashboard) runs a scan immediately.
+
+Watched companies whose own status page is blocked fall back to the national scan's numbers
+whenever they appear in it.
+
+**FlareSolverr** (`flaresolverr_url`) is used for the homepage and the company directory; it
+gets those through Cloudflare reliably. Individual status pages are fetched directly.
+
 ## Dashboard
 Open **Downdetector** in the Home Assistant sidebar (Ingress panel), or `http://<HA>:8099/` directly.
 It shows active spikes, a 24-hour reports-vs-baseline chart and top reported problems per

@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from .backends import EnterpriseBackend, UnofficialBackend
 from .dd_client import DowndetectorClient
 from .ha_mqtt import HAPublisher
 from .monitor import Monitor
+from .national import WidespreadConfig
 from .spike import SpikeConfig
 from .watchlist import Watchlist, WatchEntry
 
@@ -70,6 +72,12 @@ def settings() -> dict:
         "mqtt_user": g("mqtt_user", ""),
         "mqtt_password": g("mqtt_password", ""),
         "ha_webhook_url": g("ha_webhook_url", ""),
+        "national_scan_minute": g("national_scan_minute", 0, int),
+        "widespread": WidespreadConfig(
+            min_services=g("widespread_min_services", 3, int),
+            min_reports=g("widespread_min_reports", 1000, int),
+            check_cloudflare=g("check_cloudflare", True, bool),
+        ),
         "spike": SpikeConfig(
             ratio_multiplier=g("spike_ratio", 3.0, float),
             z_threshold=g("spike_z", 3.0, float),
@@ -92,7 +100,8 @@ def build_monitor(cfg: dict) -> Monitor:
     wl = Watchlist(Path(cfg["watchlist_file"]))
     pub = HAPublisher(cfg["mqtt_host"], cfg["mqtt_port"], cfg["mqtt_user"], cfg["mqtt_password"],
                       webhook_url=cfg["ha_webhook_url"])
-    return Monitor(backend, wl, pub, cfg["spike"], poll_interval=cfg["poll_interval"])
+    return Monitor(backend, wl, pub, cfg["spike"], poll_interval=cfg["poll_interval"],
+                   widespread_cfg=cfg["widespread"], national_scan_minute=cfg["national_scan_minute"])
 
 
 monitor: Monitor | None = None
@@ -136,11 +145,31 @@ def del_watch_q(key: str = Query(...)):
     return del_watch(key)
 
 
+@app.get("/national")
+def national():
+    """Latest national scan per watched country (homepage top list + widespread status)."""
+    return _m().national_view()
+
+
+@app.post("/scan")
+def scan():
+    """Run the national scan now (the hourly schedule is unchanged)."""
+    m = _m()
+    if not m.countries():
+        raise HTTPException(409, "no country on the watchlist; add kind=country (e.g. US) first")
+    m.scan_now()
+    return {"queued": True, "countries": m.countries()}
+
+
 @app.get("/health")
 def health():
     m = _m()
     return {"ok": m.last_error is None, "last_poll": m.last_poll, "last_error": m.last_error,
-            "backend": m.backend.name, "targets": len(m.targets)}
+            "backend": m.backend.name, "targets": len(m.targets),
+            "rate_limited_until": (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(m.backend.cooldown_until))
+                                   if getattr(m.backend, "cooldown_until", 0) > time.time() else None),
+            "countries": m.countries(),
+            "next_national_scan": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(m.next_national_scan))}
 
 
 @app.get("/status")

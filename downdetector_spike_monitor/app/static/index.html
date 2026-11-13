@@ -70,6 +70,10 @@
   .toast { position: fixed; bottom: 18px; right: 18px; background: var(--ink); color: var(--bg);
            padding: 9px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; }
   .toast.show { opacity: .95; }
+  .banner { border-radius: 10px; padding: 10px 14px; margin: 4px 0 12px; font-size: 13px; }
+  .banner.on { background: var(--danger-bg); color: var(--danger); }
+  .banner.off { background: var(--ok-bg); color: var(--ok); }
+  .banner a { color: inherit; }
   .legend { font-size: 12px; color: var(--muted); display: flex; gap: 14px; }
   .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 5px; }
 </style>
@@ -83,6 +87,22 @@
 
 <main>
   <div class="tiles" id="tiles"></div>
+
+  <section class="card" id="natCard" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <h2 id="natTitle">National scan</h2>
+      <div style="display:flex;gap:10px;align-items:center"><span class="sub" id="natMeta"></span>
+        <button class="ghost" style="color:var(--accent);border-color:var(--accent)" id="scanBtn">Scan now</button></div>
+    </div>
+    <div id="natBanner"></div>
+    <div style="overflow-x:auto;max-height:520px;overflow-y:auto">
+      <table>
+        <thead><tr><th>#</th><th>Service</th><th>Downdetector</th><th class="num">Reports</th>
+          <th class="num">Peak 24 h</th><th class="num">× normal</th><th>Last 24 h</th></tr></thead>
+        <tbody id="natRows"></tbody>
+      </table>
+    </div>
+  </section>
 
   <section class="card">
     <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
@@ -173,10 +193,12 @@ function spark(reports, baseline, active) {
 
 async function refresh() {
   try {
-    const [h, rows, wl] = await Promise.all([api("health"), api("details"), api("watchlist")]);
+    const [h, rows, wl, nat] = await Promise.all([api("health"), api("details"), api("watchlist"), api("national")]);
+    renderNational(nat);
     $("#meta").innerHTML =
       `<span>Source <b>${esc(h.backend)}</b></span><span>Last poll <b>${esc(ago(h.last_poll))}</b></span>` +
       `<span>Targets <b>${h.targets}</b></span>` +
+      (h.rate_limited_until ? `<span class="err">Rate-limited until ${esc(new Date(h.rate_limited_until).toLocaleTimeString())}</span>` : "") +
       (h.last_error ? `<span class="err">Error: ${esc(h.last_error)}</span>` : "");
     const active = rows.filter(r => r.state.active);
     const worst = active.reduce((m, r) => r.state.ratio > (m?.state.ratio ?? 0) ? r : m, null);
@@ -191,7 +213,8 @@ async function refresh() {
       const s = r.state;
       const pill = s.active ? `<span class="pill ${s.severity}">Spike · ${s.severity}</span>`
                             : `<span class="pill none">Normal</span>`;
-      const dd = s.dd_status ? `<div class="sub">Downdetector: ${esc(s.dd_status)}</div>` : "";
+      const dd = (s.dd_status ? `<div class="sub">Downdetector: ${esc(s.dd_status)}</div>` : "") +
+        `<div class="sub">updated ${esc(ago(s.last_updated))}${r.source === "national_scan" ? " · via national scan" : ""}</div>`;
       const since = s.active && s.triggered_at ? `<div class="sub">since ${esc(ago(s.triggered_at))} · peak ${fmt(s.peak)}</div>` : "";
       const reasons = s.active && s.reasons?.length ? `<div class="reasons">${esc(s.reasons.join(" · "))}</div>` : "";
       const chips = (r.indicators || []).map(i => `<span>${esc(i.name)} ${fmt(i.count)}</span>`).join("");
@@ -216,6 +239,43 @@ async function refresh() {
   }
 }
 
+function renderNational(list) {
+  const n = (list || [])[0];
+  if (!n) { $("#natCard").style.display = "none"; return; }
+  $("#natCard").style.display = "";
+  $("#natTitle").textContent = `National scan — ${n.country}`;
+  $("#natMeta").textContent = n.scanned_at ? `scanned ${ago(n.scanned_at)} · next ${new Date(n.next_scan).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})}`
+                                           : `first scan ${new Date(n.next_scan).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})}`;
+  let b = "";
+  if (n.error) b = `<div class="banner on">Last scan failed: ${esc(n.error)}</div>`;
+  else if (n.widespread) {
+    const cf = n.cloudflare || {};
+    const cfTxt = cf.indicator === "unknown" || !cf.indicator ? "Cloudflare status could not be checked."
+      : cf.likely_cause ? `Cloudflare reports a <b>${esc(cf.indicator)}</b> incident — likely common cause.` +
+          (cf.incidents || []).slice(0, 2).map(i => ` <a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.name)}</a>`).join(";")
+      : `Cloudflare: ${esc(cf.description || cf.indicator)} — not the likely cause.`;
+    b = `<div class="banner on"><b>Widespread outage</b> since ${esc(ago(n.widespread_since))}: ` +
+        `${n.affected.length} services at danger with 1,000+ reports/15 min — ${esc(n.affected.map(a => a.name).join(", "))}. ${cfTxt}</div>`;
+  } else if (n.scanned_at) b = `<div class="banner off">No widespread outage. ${n.services_in_danger} of ${n.services_listed} listed services at danger.</div>`;
+  $("#natBanner").innerHTML = b;
+  $("#natRows").innerHTML = (n.companies || []).map(c => {
+    const hot = n.affected && n.affected.some(a => a.slug === c.slug);
+    const ratio = c.baseline_est ? (c.current / c.baseline_est) : 0;
+    return `<tr><td class="sub">${c.rank}</td>
+      <td class="name"><a href="https://downdetector.com/status/${esc(c.slug)}/" target="_blank" rel="noopener">${esc(c.name)}</a>
+        <div class="sub">${esc(c.category.replace(/-/g, " "))}</div></td>
+      <td><span class="pill ${esc(c.status || "unknown")}">${esc(c.status || "?")}</span></td>
+      <td class="num">${fmt(c.current)}</td><td class="num">${fmt(c.peak_24h)}</td>
+      <td class="num">${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}×</td>
+      <td>${spark(c.sparkline, new Array(c.sparkline.length).fill(c.baseline_est), hot)}</td></tr>`;
+  }).join("") || `<tr><td colspan="7" class="empty">Waiting for the first scan.</td></tr>`;
+}
+
+$("#scanBtn").addEventListener("click", async () => {
+  try { await api("scan", { method: "POST" }); toast("Scan queued — takes ~10 s"); setTimeout(refresh, 12000); }
+  catch (e) { toast("Scan failed: " + e.message); }
+});
+
 $("#watch").addEventListener("click", async ev => {
   const key = ev.target.dataset?.key; if (!key) return;
   if (!confirm("Stop watching " + key + "?")) return;
@@ -226,7 +286,7 @@ $("#watch").addEventListener("click", async ev => {
 function syncKind() {
   const k = $("#kind").value;
   $("#cityFields").style.display = k === "city" ? "" : "none";
-  $("#valLbl").firstChild.textContent = { company: "Company slug or name ", url: "Website URL ", country: "Country code ", city: "City name " }[k];
+  $("#valLbl").firstChild.textContent = { company: "Company slug or name ", url: "Website URL ", country: "Country code (hourly national scan) ", city: "City name " }[k];
   $("#value").placeholder = { company: "att, entergy, chase…", url: "https://www.chase.com", country: "US", city: "Little Rock" }[k];
 }
 $("#kind").addEventListener("change", syncKind);

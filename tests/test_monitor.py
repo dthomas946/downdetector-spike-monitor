@@ -1,4 +1,5 @@
 import base64
+import time
 import json
 from pathlib import Path
 
@@ -230,3 +231,89 @@ def test_unofficial_circuit_breaker(tmp_path):
     assert be.cooldown_until > 0 and be._cooldown == 300
     mon.run_once()
     assert hits["n"] == 2                    # still cooling down: no requests sent
+
+
+# ------------------------------------------------------------- national scan
+def _home_fetch(url):
+    if url.rstrip("/").endswith("downdetector.com"):
+        return (FIX / "homepage_2026-11-12.html").read_text()
+    return _fake_fetch(url)
+
+
+def test_parse_homepage_real_format():
+    from app.national import parse_homepage
+    rows = parse_homepage((FIX / "homepage_2026-11-12.html").read_text())
+    assert [r["slug"] for r in rows][:2] == ["outlook", "microsoft-365"] and len(rows) == 7
+    o = rows[0]
+    assert o["status"] == "danger" and o["current"] == 30268 and o["peak_24h"] == 129476
+    assert o["baseline_est"] < 20 and o["category"] == "email" and o["id"] == 10205
+    assert rows[5]["name"] == "AT&T"
+
+
+def test_widespread_and_cloudflare(tmp_path, monkeypatch):
+    from app import national
+    from app.backends import UnofficialBackend
+    from app.national import WidespreadConfig
+    calls = []
+    def fake_cf(*a, **k):
+        calls.append(1)
+        return {"indicator": "none", "incidents": [], "likely_cause": False}
+    import app.monitor as monmod
+    monkeypatch.setattr(monmod, "check_cloudflare", fake_cf)
+    be = UnofficialBackend(fetch=_home_fetch, request_spacing=0, backoff=0)
+    wl = Watchlist(tmp_path / "wl.yaml")
+    wl.add(WatchEntry(kind="country", value="US"))
+    pub = NullPub(); raw = []
+    pub.publish_national = lambda s: None
+    pub.publish_raw_event = lambda p: raw.append(p)
+    mon = Monitor(be, wl, pub, SpikeConfig(), widespread_cfg=WidespreadConfig(min_services=3, min_reports=1000))
+    assert mon.countries() == ["US"]
+    mon.run_once()
+    assert mon.targets == {}                        # country entry -> no per-company targets
+    st = mon.run_national_scan("US")
+    # Outlook, M365, Store (max last hr 1938), Copilot (1163) >= 1000 & danger; Gmail 516 < 1000
+    assert st.widespread and [a["slug"] for a in st.affected] == ["outlook", "microsoft-365", "microsoft", "microsoft-copilot"]
+    assert raw[-1]["event"] == "widespread_outage_started" and calls == [1]
+    assert raw[-1]["cloudflare"]["indicator"] == "none"
+    mon.run_national_scan("US")                       # still widespread: no duplicate event
+    assert len(raw) == 1
+
+
+def test_watched_company_falls_back_to_national(tmp_path):
+    from app.backends import UnofficialBackend, RateLimited
+    def fetch(url):
+        if "/status/" in url:
+            raise RateLimited("429")
+        return _home_fetch(url) if url.rstrip("/").endswith(".com") else _fake_fetch(url)
+    dirhtml = '<a title="Microsoft Outlook" href="/status/outlook/"></a>'
+    be = UnofficialBackend(fetch=fetch, request_spacing=0, backoff=0,
+                           site_fetch=lambda u: dirhtml if u.endswith("/companies/") else _home_fetch(u))
+    wl = Watchlist(tmp_path / "wl.yaml")
+    wl.add(WatchEntry(kind="country", value="US"))
+    wl.add(WatchEntry(kind="company", value="outlook", country="US"))
+    pub = NullPub()
+    pub.publish_national = lambda s: None
+    pub.publish_raw_event = lambda p: None
+    mon = Monitor(be, wl, pub, SpikeConfig())
+    mon.run_national_scan("US")
+    mon.run_once()
+    s = mon.states["outlook"]
+    assert s.active and s.current == 30268 and mon.details["outlook"]["source"] == "national_scan"
+
+
+def test_next_scan_time_top_of_hour():
+    from app.national import next_scan_time
+    import calendar
+    t = calendar.timegm((2026, 11, 12, 23, 52, 10, 0, 0, 0))
+    assert time.gmtime(next_scan_time(0, t))[3:6] == (0, 0, 0)       # 00:00:00 next day
+    assert time.gmtime(next_scan_time(55, t))[3:6] == (23, 55, 0)
+
+
+def test_cloudflare_summary_parse():
+    from app.national import check_cloudflare
+    body = {"status": {"indicator": "major", "description": "Partial System Outage"},
+            "incidents": [{"name": "Elevated errors", "status": "investigating", "impact": "major",
+                           "shortlink": "https://stspg.io/x"}],
+            "components": [{"name": "CDN/Cache", "status": "major_outage"}, {"name": "DNS", "status": "operational"}]}
+    r = check_cloudflare(get=lambda u: body)
+    assert r["likely_cause"] and r["degraded_components"] == ["CDN/Cache"] and r["incidents"][0]["impact"] == "major"

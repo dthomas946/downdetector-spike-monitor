@@ -1,5 +1,5 @@
 name: Downdetector Spike Monitor
-version: "0.3.0"
+version: "0.4.0"
 slug: downdetector_spike_monitor
 description: Alerts when user-reported outage spikes appear on Downdetector for companies, URLs, countries or cities you watch.
 url: https://github.com/dthomas946/downdetector-spike-monitor
@@ -24,6 +24,10 @@ options:
   dd_client_secret: ""
   flaresolverr_url: ""
   request_spacing: 3
+  national_scan_minute: 0
+  widespread_min_services: 3
+  widespread_min_reports: 1000
+  check_cloudflare: true
   poll_interval: 300
   spike_ratio: 3.0
   spike_z: 3.0
@@ -38,6 +42,10 @@ schema:
   dd_client_secret: password?
   flaresolverr_url: str?
   request_spacing: float(0,60)
+  national_scan_minute: int(0,59)
+  widespread_min_services: int(1,50)
+  widespread_min_reports: int(1,1000000)
+  check_cloudflare: bool
   poll_interval: int(60,3600)
   spike_ratio: float(1.5,20)
   spike_z: float(1,10)

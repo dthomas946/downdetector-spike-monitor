@@ -197,15 +197,46 @@ def _fetch_html(url: str, timeout: float = 25.0) -> str:
     return text
 
 
-def _fetch_via_flaresolverr(url: str, solver_url: str, timeout: float = 60.0) -> str:
-    """Optional: FlareSolverr (https://github.com/FlareSolverr/FlareSolverr) runs a real
-    browser and solves Cloudflare challenges. Set FLARESOLVERR_URL=http://host:8191/v1."""
-    r = httpx.post(solver_url, json={"cmd": "request.get", "url": url, "maxTimeout": int(timeout * 1000)},
-                   timeout=timeout + 5)
-    body = r.json()
-    if body.get("status") != "ok":
-        raise RuntimeError(f"flaresolverr: {body.get('message')}")
-    return body["solution"]["response"]
+class FlareSolverr:
+    """Client for FlareSolverr (https://github.com/FlareSolverr/FlareSolverr), a headless
+    browser that gets past Cloudflare's JS challenge. Keeps one browser session alive so
+    cookies (__cf_bm, cf_clearance) carry over between requests, like a real visitor."""
+
+    SESSION = "downdetector-spike-monitor"
+
+    def __init__(self, url: str, timeout: float = 60.0):
+        self.url = url
+        self.timeout = timeout
+        self._session_ok = False
+
+    def _call(self, payload: dict) -> dict:
+        r = httpx.post(self.url, json=payload, timeout=self.timeout + 15)
+        try:
+            return r.json()
+        except ValueError:
+            raise RuntimeError(f"flaresolverr HTTP {r.status_code}: {r.text[:200]}")
+
+    def _ensure_session(self):
+        if self._session_ok:
+            return
+        body = self._call({"cmd": "sessions.create", "session": self.SESSION})
+        if body.get("status") != "ok" and "already exists" not in str(body.get("message", "")):
+            raise RuntimeError(f"flaresolverr session: {body.get('message')}")
+        self._session_ok = True
+
+    def get(self, url: str) -> str:
+        self._ensure_session()
+        body = self._call({"cmd": "request.get", "url": url, "session": self.SESSION,
+                           "maxTimeout": int(self.timeout * 1000)})
+        if body.get("status") != "ok":
+            msg = str(body.get("message"))
+            if "session" in msg.lower():
+                self._session_ok = False          # recreate next time
+            raise RuntimeError(f"flaresolverr: {msg}")
+        sol = body["solution"]
+        if int(sol.get("status") or 200) == 429:
+            raise RateLimited(f"{url} -> 429 via flaresolverr")
+        return sol["response"]
 
 
 class UnofficialBackend:
@@ -215,8 +246,10 @@ class UnofficialBackend:
     DIRECTORY_TTL = 24 * 3600
 
     def __init__(self, flaresolverr_url: str = "", fetch=None, request_spacing: float = 3.0,
-                 backoff: float = 30.0):
+                 backoff: float = 30.0, site_fetch=None):
         self.flaresolverr_url = flaresolverr_url
+        self._flaresolverr = FlareSolverr(flaresolverr_url) if flaresolverr_url else None
+        self._site_fetch = site_fetch            # injectable for tests (homepage / directory)
         self.request_spacing = request_spacing   # seconds between page fetches
         self.backoff = backoff                   # wait before the single retry after a 429
         # circuit breaker: after a 429 that survives the retry, skip polling until
@@ -232,11 +265,28 @@ class UnofficialBackend:
         return COUNTRY_SITE_DOMAINS.get((country or "US").upper(), "downdetector.com")
 
     def fetch(self, url: str) -> str:
+        """Company status pages: direct, browser-fingerprinted fetch. (Through FlareSolverr
+        these currently hit a challenge it can't solve, so it isn't used for them.)"""
         if self._fetch:
             return self._fetch(url)
-        if self.flaresolverr_url:
-            return _fetch_via_flaresolverr(url, self.flaresolverr_url)
         return _fetch_html(url)
+
+    def fetch_site(self, url: str) -> str:
+        """Homepage and company directory: via FlareSolverr when configured."""
+        if self._site_fetch:
+            return self._site_fetch(url)
+        if self._fetch:
+            return self._fetch(url)
+        if self._flaresolverr:
+            return self._flaresolverr.get(url)
+        return _fetch_html(url)
+
+    def national_scan(self, country: Optional[str]) -> list[dict]:
+        from .national import parse_homepage
+        rows = parse_homepage(self.fetch_site(f"https://{self._domain(country)}/"))
+        if not rows:
+            raise RuntimeError("homepage parsed 0 services (challenge page or layout change)")
+        return rows
 
     def directory(self, country: Optional[str]) -> dict[str, str]:
         """{slug: name} for every company on that country's site (cached 24h)."""
@@ -244,7 +294,7 @@ class UnofficialBackend:
         ts, cached = self._dir.get(dom, (0.0, {}))
         if cached and time.time() - ts < self.DIRECTORY_TTL:
             return cached
-        html = self.fetch(f"https://{dom}/companies/")
+        html = self.fetch_site(f"https://{dom}/companies/")
         d = {slug: _html.unescape(name) for name, slug in _DIRECTORY_RE.findall(html)}
         if not d:
             log.warning("company directory parsed 0 entries from %s (layout changed?)", dom)
@@ -292,6 +342,8 @@ class UnofficialBackend:
                       source_entry=entry.key(), city=city)
 
     def resolve(self, entry: WatchEntry) -> list[Target]:
+        if entry.kind == "country":
+            return []        # handled by the hourly national scan (homepage), not per-company polling
         d = self.directory(entry.country)
         if entry.kind == "company":
             if entry.value in d:
@@ -308,9 +360,7 @@ class UnofficialBackend:
             pick = (exact or hits)[:1]
             return [self._target(h["slug"], h["name"], entry) for h in pick]
         if entry.kind == "country":
-            log.warning("country=%s resolves to %d companies; one page fetch each per poll "
-                        "— raise poll_interval accordingly", entry.value, len(d))
-            return [self._target(s, n, entry) for s, n in d.items()]
+            return []        # handled by the hourly national scan (homepage), not per-company polling
         if entry.kind == "city":
             log.warning("unofficial backend has no geo filter; watching %s nationally", entry.companies)
             return [self._target(s, d.get(s, s), entry) for s in entry.companies]
