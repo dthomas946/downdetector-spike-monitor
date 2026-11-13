@@ -1,9 +1,13 @@
 """Polling loop: resolve watchlist -> poll backend -> evaluate spikes -> publish."""
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
+from dataclasses import asdict
+from pathlib import Path
 from typing import Optional
 
 from .backends import Backend, Snapshot
@@ -19,7 +23,8 @@ log = logging.getLogger("dd.monitor")
 class Monitor:
     def __init__(self, backend: Backend, watchlist: Watchlist, publisher: HAPublisher,
                  spike_cfg: SpikeConfig, poll_interval: int = 300, resolve_interval: int = 3600,
-                 widespread_cfg: Optional[WidespreadConfig] = None, national_scan_minute: int = 0):
+                 widespread_cfg: Optional[WidespreadConfig] = None, national_scan_minute: int = 0,
+                 state_file: Optional[Path] = None):
         self.backend = backend
         self.watchlist = watchlist
         self.publisher = publisher
@@ -42,6 +47,8 @@ class Monitor:
         self.national: dict[str, NationalState] = {}
         self.next_national_scan = next_scan_time(self.national_scan_minute)
         self._scan_now = threading.Event()
+        self.state_file = Path(state_file) if state_file else None
+        self.load_state()
 
     # ------------------------------------------------------------ lifecycle
     def start(self):
@@ -101,7 +108,7 @@ class Monitor:
         with self._lock:
             self.targets = new
             for uid in list(self.states):
-                if uid not in new:
+                if uid not in new and new:
                     del self.states[uid]
                     self.details.pop(uid, None)
         self._last_resolve = time.time()
@@ -118,6 +125,8 @@ class Monitor:
         snaps += self._from_national([t for t in targets if t.uid not in got])
         for snap in snaps:
             self._apply(snap)
+        if snaps:
+            self.save_state()
         self.last_poll = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self.last_error = None
 
@@ -149,6 +158,44 @@ class Monitor:
             self.publisher.publish_event(t, st, "spike_cleared")
 
     # --------------------------------------------------------------- views
+    # ---------------------------------------------------------- persistence
+    STATE_MAX_AGE = 24 * 3600
+
+    def save_state(self):
+        """Persist spike + national state so a restart doesn't re-announce ongoing outages."""
+        if not self.state_file:
+            return
+        with self._lock:
+            data = {
+                "saved_at": time.time(),
+                "states": {uid: s.to_dict() for uid, s in self.states.items()},
+                "details": self.details,
+                "national": {iso: asdict(st) for iso, st in self.national.items()},
+            }
+        try:
+            tmp = self.state_file.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data))
+            os.replace(tmp, self.state_file)
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not save state: %s", e)
+
+    def load_state(self):
+        if not self.state_file or not self.state_file.exists():
+            return
+        try:
+            data = json.loads(self.state_file.read_text())
+            age = time.time() - float(data.get("saved_at", 0))
+            if age > self.STATE_MAX_AGE:
+                log.info("saved state is %.0f h old; starting fresh", age / 3600)
+                return
+            self.states = {uid: SpikeState(**d) for uid, d in data.get("states", {}).items()}
+            self.details = data.get("details", {})
+            self.national = {iso: NationalState(**d) for iso, d in data.get("national", {}).items()}
+            log.info("restored state: %d services (%d active spikes), %d national scans",
+                     len(self.states), sum(s.active for s in self.states.values()), len(self.national))
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not load saved state (%s); starting fresh", e)
+
     # ------------------------------------------------------- national scan
     def countries(self) -> list[str]:
         return sorted({(e.value or "US").upper() for e in self.watchlist.entries
@@ -190,6 +237,7 @@ class Monitor:
                  iso, len(rows), sum(r["status"] == "danger" for r in rows), st.widespread,
                  len(affected), f", cloudflare={st.cloudflare.get('indicator')}" if st.cloudflare and st.widespread else "")
         summ = st.summary()
+        self.save_state()
         self.publisher.publish_national(summ)
         if st.widespread and not was:
             self.publisher.publish_raw_event({"event": "widespread_outage_started", **summ})

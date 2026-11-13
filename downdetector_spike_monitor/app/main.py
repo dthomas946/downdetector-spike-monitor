@@ -67,6 +67,7 @@ def settings() -> dict:
         "dd_base_url": g("dd_base_url", "https://downdetectorapi.com/v2"),
         "poll_interval": g("poll_interval", 300, int),
         "watchlist_file": g("watchlist_file", "/data/watchlist.yaml"),
+        "state_file": g("state_file", "/data/state.json"),
         "mqtt_host": g("mqtt_host", ""),
         "mqtt_port": g("mqtt_port", 1883, int),
         "mqtt_user": g("mqtt_user", ""),
@@ -101,7 +102,8 @@ def build_monitor(cfg: dict) -> Monitor:
     pub = HAPublisher(cfg["mqtt_host"], cfg["mqtt_port"], cfg["mqtt_user"], cfg["mqtt_password"],
                       webhook_url=cfg["ha_webhook_url"])
     return Monitor(backend, wl, pub, cfg["spike"], poll_interval=cfg["poll_interval"],
-                   widespread_cfg=cfg["widespread"], national_scan_minute=cfg["national_scan_minute"])
+                   widespread_cfg=cfg["widespread"], national_scan_minute=cfg["national_scan_minute"],
+                   state_file=Path(cfg["state_file"]))
 
 
 monitor: Monitor | None = None

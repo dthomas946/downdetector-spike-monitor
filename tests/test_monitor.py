@@ -334,3 +334,27 @@ def test_flaresolverr_recovers_from_crashed_tab(monkeypatch):
     fs = FlareSolverr("http://x/v1")
     assert fs.get("https://downdetector.com/") == "<html>ok</html>"
     assert calls == ["request.get", "request.get"]            # no persistent session
+
+
+def test_restart_does_not_reannounce(tmp_path, monkeypatch):
+    """State survives a restart: an ongoing spike / widespread outage is not re-announced."""
+    import app.monitor as monmod
+    from app.backends import UnofficialBackend
+    monkeypatch.setattr(monmod, "check_cloudflare", lambda *a, **k: {"indicator": "none"})
+    sf = tmp_path / "state.json"
+    def build():
+        be = UnofficialBackend(fetch=_home_fetch, request_spacing=0, backoff=0)
+        wl = Watchlist(tmp_path / "wl.yaml")
+        pub = NullPub(); raw = []
+        pub.publish_national = lambda s: None
+        pub.publish_raw_event = lambda p: raw.append(p["event"])
+        return Monitor(be, wl, pub, SpikeConfig(), state_file=sf), pub, raw, wl
+    m1, pub1, raw1, wl = build()
+    wl.add(WatchEntry(kind="country", value="US"))
+    wl.add(WatchEntry(kind="company", value="aws-amazon-web-services"))
+    m1.run_national_scan("US"); m1.run_once()
+    assert raw1 == ["widespread_outage_started"] and pub1.events[-1][1] == "spike_started"
+    m2, pub2, raw2, _ = build()                       # "restart"
+    assert m2.states["aws-amazon-web-services"].active and m2.national["US"].widespread
+    m2.run_national_scan("US"); m2.run_once()
+    assert raw2 == [] and pub2.events == []           # nothing re-announced
