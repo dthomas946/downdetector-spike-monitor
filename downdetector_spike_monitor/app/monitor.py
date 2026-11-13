@@ -297,7 +297,7 @@ class Monitor:
         with self._lock:
             rows = [dict(d, state=self.states[d["uid"]].to_dict()) for d in self.details.values()
                     if d["uid"] in self.states]
-        rows.sort(key=lambda r: (not r["state"]["active"], -r["state"]["ratio"], r["name"].lower()))
+        rows.sort(key=lambda r: (-(r["state"]["ratio"] or 0), r["name"].lower()))   # × normal, descending
         return rows
 
     def snapshot(self) -> dict:

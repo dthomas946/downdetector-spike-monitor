@@ -99,7 +99,7 @@
     <div style="overflow-x:auto;max-height:520px;overflow-y:auto">
       <table>
         <thead><tr><th>#</th><th>Service</th><th>Downdetector</th><th class="num">Reports</th>
-          <th class="num">Peak 24 h</th><th class="num">× normal</th><th>Last 24 h</th></tr></thead>
+          <th class="num">Peak 24 h</th><th class="num">× normal ▼</th><th>Last 24 h</th></tr></thead>
         <tbody id="natRows"></tbody>
       </table>
     </div>
@@ -116,7 +116,7 @@
       <table>
         <thead><tr>
           <th>Service</th><th>State</th><th class="num">Reports</th><th class="num">Baseline</th>
-          <th class="num">× normal</th><th>Last 24 h</th><th class="hide-sm">Top problems</th>
+          <th class="num">× normal ▼</th><th>Last 24 h</th><th class="hide-sm">Top problems</th>
         </tr></thead>
         <tbody id="rows"><tr><td colspan="7" class="empty">Waiting for first poll…</td></tr></tbody>
       </table>
@@ -262,11 +262,13 @@ function renderNational(list) {
   $("#natBanner").innerHTML = b;
   const minR = n.list_min_reports || 1000;
   const all = n.companies || [];
-  const shown = natShowAll ? all : all.filter(c => c.last_hour_max > minR);
+  const ratioOf = c => c.baseline_est ? c.current / c.baseline_est : 0;
+  const shown = (natShowAll ? all.slice() : all.filter(c => c.last_hour_max > minR))
+    .sort((a, b) => ratioOf(b) - ratioOf(a));                    // × normal, descending
   const hidden = all.length - shown.length;
   $("#natRows").innerHTML = shown.map(c => {
     const hot = n.affected && n.affected.some(a => a.slug === c.slug);
-    const ratio = c.baseline_est ? (c.current / c.baseline_est) : 0;
+    const ratio = ratioOf(c);
     return `<tr><td class="sub">${c.rank}</td>
       <td class="name"><a href="https://downdetector.com/status/${esc(c.slug)}/" target="_blank" rel="noopener">${esc(c.name)}</a>
         <div class="sub">${esc(c.category.replace(/-/g, " "))}</div></td>
