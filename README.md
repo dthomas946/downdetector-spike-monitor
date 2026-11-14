@@ -8,6 +8,10 @@ care about, detects **spikes in user-reported problems**, and alerts you in Home
 including an hourly **national scan** that flags widespread outages and checks whether
 Cloudflare is the likely common cause.
 
+> **Built with AI assistance.** I designed it, set the requirements, and run and test it on my own
+> Home Assistant, but most of the code was written with Claude (Anthropic's AI). It's MIT licensed and
+> fully readable — review it like you would any third-party app, and please open an issue if you spot problems.
+
 ## Install
 
 1. Click **Add repository** above (or in Home Assistant go to *Settings → Apps → App store →
